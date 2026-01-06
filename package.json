@@ -1,0 +1,18 @@
+{
+  "name": "sistema-joyeria",
+  "private": true,
+  "type": "commonjs",
+  "scripts": {
+    "build": "npm install --prefix backend && npm install --prefix frontend && npm run prisma:generate --prefix backend && npx --prefix backend prisma migrate deploy && npm run build --prefix frontend",
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "cors": "^2.8.5",
+    "dotenv": "^17.2.3",
+    "express": "^5.1.0",
+    "next": "^16.0.8",
+    "react": "^19.2.1",
+    "react-dom": "^19.2.1"
+  }
+}
+

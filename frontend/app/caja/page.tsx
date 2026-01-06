@@ -1,0 +1,1223 @@
+"use client";
+
+import { useEffect, useMemo, useRef, useState } from "react";
+import { useRouter } from "next/navigation";
+import AdminSidebar from "../_components/AdminSidebar";
+
+const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+
+interface User {
+  id: string;
+  nombre: string;
+  email: string;
+  rol: string;
+}
+
+interface ProductoPublico {
+  id: string;
+  sku: string;
+  nombre: string;
+  precio_venta: number;
+  codigo_barras: string | null;
+  categoria?: string | null;
+  disponible?: boolean;
+}
+
+type MetodoPago = "EFECTIVO" | "TARJETA" | "TRANSFERENCIA";
+
+type CajaEstado = "CARGANDO" | "SIN_APERTURA" | "ABIERTA" | "CERRADA";
+
+interface CierreCaja {
+  id: string;
+  sucursal_id: string;
+  usuario_id: string;
+  fecha_inicio: string;
+  fecha_fin: string | null;
+
+  // Nuevos campos
+  monto_apertura?: number | null;
+  monto_cierre_reportado?: number | null;
+  diferencia?: number | null;
+
+  // Totales
+  total_efectivo: number;
+  total_transferencia: number;
+  total_tarjeta: number;
+  total_general: number;
+}
+
+export default function CajaPage() {
+  const router = useRouter();
+
+  const [user, setUser] = useState<User | null>(null);
+  const [token, setToken] = useState<string | null>(null);
+
+  // Caja (apertura)
+  const [cajaEstado, setCajaEstado] = useState<CajaEstado>("CARGANDO");
+  const [cierreActual, setCierreActual] = useState<CierreCaja | null>(null);
+  const [montoApertura, setMontoApertura] = useState<string>("");
+
+  // ✅ NUEVO: cierre de caja (opcional)
+  const [showCerrarCaja, setShowCerrarCaja] = useState(false);
+  const [montoCierreReportado, setMontoCierreReportado] = useState<string>("");
+
+  const [search, setSearch] = useState("");
+  const [barcodeInput, setBarcodeInput] = useState("");
+
+  const [loading, setLoading] = useState(false);
+  const [loadingCaja, setLoadingCaja] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const [productos, setProductos] = useState<ProductoPublico[]>([]);
+
+  const [cart, setCart] = useState<
+    Array<{
+      producto_id: string;
+      nombre: string;
+      sku: string;
+      codigo_barras: string | null;
+      precio_unitario: number;
+      qty: number;
+    }>
+  >([]);
+
+  const [metodoPago, setMetodoPago] = useState<MetodoPago>("EFECTIVO");
+  const [efectivoRecibido, setEfectivoRecibido] = useState<string>("");
+
+  const today = new Date().toLocaleDateString("es-GT", {
+    weekday: "long",
+    year: "numeric",
+    month: "short",
+    day: "numeric",
+  });
+
+  const fmtQ = (n: any) => `Q ${Number(n || 0).toFixed(2)}`;
+
+  const estadoBadge = (estado: CajaEstado) => {
+    const base =
+      "inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold";
+    if (estado === "ABIERTA")
+      return `${base} border-emerald-400/30 bg-emerald-400/10 text-emerald-100`;
+    if (estado === "CERRADA")
+      return `${base} border-amber-400/30 bg-amber-400/10 text-amber-100`;
+    if (estado === "SIN_APERTURA")
+      return `${base} border-[#7a2b33] bg-[#3a0d12]/50 text-[#f1e4d4]`;
+    return `${base} border-[#7a2b33] bg-[#3a0d12]/50 text-[#c9b296]`;
+  };
+
+  // ==========================
+  // ✅ NUEVO: ref + focus para escaneo
+  // ==========================
+  const barcodeRef = useRef<HTMLInputElement | null>(null);
+
+  const focusBarcode = () => {
+    try {
+      barcodeRef.current?.focus();
+      barcodeRef.current?.select?.();
+    } catch {}
+  };
+
+  // ==========================
+  // 1) Sesión + rol
+  // ==========================
+  useEffect(() => {
+    const t = localStorage.getItem("joyeria_token");
+    const uStr = localStorage.getItem("joyeria_user");
+
+    if (!t || !uStr) {
+      router.push("/login");
+      return;
+    }
+
+    try {
+      const u: User = JSON.parse(uStr);
+
+      // ✅ Solo ADMIN o CAJERO
+      if (u.rol !== "ADMIN" && u.rol !== "CAJERO") {
+        router.push("/login");
+        return;
+      }
+
+      setUser(u);
+      setToken(t);
+    } catch {
+      router.push("/login");
+    }
+  }, [router]);
+
+  // ==========================
+  // 2) Estado de caja del día
+  // ==========================
+  const verificarCajaHoy = async () => {
+    if (!token) return;
+
+    try {
+      setLoadingCaja(true);
+      setError(null);
+
+      const res = await fetch(`${API_URL}/api/cash-register/today`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      const data = await res.json();
+      if (!res.ok)
+        throw new Error(data?.message || "Error verificando caja del día");
+
+      const estado = (data?.data?.estado || "SIN_APERTURA") as CajaEstado;
+      const cierre = (data?.data?.cierreActual || null) as CierreCaja | null;
+
+      setCajaEstado(estado);
+      setCierreActual(cierre);
+
+      // Si está abierta y en BD hay monto_apertura, lo dejamos como referencia visual
+      if (estado === "ABIERTA" && cierre?.monto_apertura != null) {
+        setMontoApertura(String(Number(cierre.monto_apertura || 0).toFixed(2)));
+      }
+    } catch (e: any) {
+      console.error(e);
+      setCajaEstado("SIN_APERTURA");
+      setCierreActual(null);
+      setError(e?.message ?? "Error verificando caja del día");
+    } finally {
+      setLoadingCaja(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    verificarCajaHoy();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  // ==========================
+  // 3) Abrir caja (monto_apertura)
+  // ==========================
+  const aperturarCaja = async () => {
+    if (!token) return;
+
+    // Normaliza: "1,000.50" -> "1000.50"
+    const raw = String(montoApertura ?? "").trim().replaceAll(",", "");
+    const n = raw === "" ? 0 : Number(raw);
+
+    if (!Number.isFinite(n) || n < 0) {
+      setError("Monto de apertura inválido (debe ser un número ≥ 0).");
+      return;
+    }
+
+    try {
+      setLoadingCaja(true);
+      setError(null);
+
+      const res = await fetch(`${API_URL}/api/cash-register/open`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({ monto_apertura: Number(n.toFixed(2)) }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Error al aperturar caja");
+
+      const cierre = (data?.data?.cierre || null) as CierreCaja | null;
+
+      setCierreActual(cierre);
+      setMontoApertura(String(Number(cierre?.monto_apertura ?? n).toFixed(2)));
+
+      await verificarCajaHoy();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Error al aperturar caja");
+    } finally {
+      setLoadingCaja(false);
+    }
+  };
+
+  // ==========================
+  // ✅ NUEVO) Cerrar caja (monto_cierre_reportado opcional)
+  // ==========================
+  const cerrarCaja = async () => {
+    if (!token) return;
+
+    if (cajaEstado !== "ABIERTA") {
+      setError("La caja no está abierta.");
+      return;
+    }
+
+    // Evita cerrar con carrito con cosas (cierre limpio)
+    if (cart.length > 0) {
+      setError(
+        "Tienes productos en el carrito. Confirma o vacía antes de cerrar caja."
+      );
+      return;
+    }
+
+    // Confirmación simple (sin dramas, pero con responsabilidad)
+    if (typeof window !== "undefined") {
+      const ok = window.confirm(
+        "¿Cerrar caja ahora? Asegúrate de no tener ventas pendientes."
+      );
+      if (!ok) return;
+    }
+
+    let payload: any = {};
+
+    const raw = String(montoCierreReportado ?? "").trim().replaceAll(",", "");
+    if (raw !== "") {
+      const n = Number(raw);
+      if (!Number.isFinite(n) || n < 0) {
+        setError("Efectivo contado inválido (debe ser un número ≥ 0 o vacío).");
+        return;
+      }
+      payload.monto_cierre_reportado = Number(n.toFixed(2));
+    }
+
+    try {
+      setLoadingCaja(true);
+      setError(null);
+
+      const res = await fetch(`${API_URL}/api/cash-register/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(payload),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Error al cerrar caja");
+
+      const cierre = (data?.data?.cierre || null) as CierreCaja | null;
+      setCierreActual(cierre);
+
+      // Limpia UI de cierre
+      setMontoCierreReportado("");
+      setShowCerrarCaja(false);
+
+      // Refresca estado real
+      await verificarCajaHoy();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Error al cerrar caja");
+    } finally {
+      setLoadingCaja(false);
+    }
+  };
+
+  // ==========================
+  // 4) Cargar inventario público (solo cuando ABIERTA)
+  // ==========================
+  const cargarPublico = async () => {
+    if (!token) return;
+    try {
+      setLoading(true);
+      setError(null);
+
+      const res = await fetch(`${API_URL}/api/inventory/stock?vista=publico`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!res.ok) throw new Error("Error al cargar inventario público");
+
+      const data = await res.json();
+      const items = (data.productos || data.existencias || []) as any[];
+
+      const normalized: ProductoPublico[] = items.map((r) => ({
+        id: String(r.id || r.producto_id),
+        sku: String(r.sku ?? ""),
+        nombre: String(r.nombre ?? ""),
+        codigo_barras: r.codigo_barras ?? null,
+        precio_venta: Number(r.precio_venta ?? 0),
+        categoria: r.categoria ?? null,
+        disponible: typeof r.disponible === "boolean" ? r.disponible : true,
+      }));
+
+      setProductos(normalized);
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Error al cargar inventario público");
+      setProductos([]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+    if (cajaEstado !== "ABIERTA") return;
+
+    cargarPublico();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token, cajaEstado]);
+
+  // ==========================
+  // 5) Filtros / búsqueda
+  // ==========================
+  const q = search.trim().toLowerCase();
+
+  const productosFiltrados = useMemo(() => {
+    return (productos || []).filter((p) => {
+      if (p.disponible === false) return false;
+      if (!q) return true;
+      return (
+        (p.nombre ?? "").toLowerCase().includes(q) ||
+        (p.sku ?? "").toLowerCase().includes(q) ||
+        (p.codigo_barras ?? "").toLowerCase().includes(q) ||
+        (p.categoria ?? "").toLowerCase().includes(q)
+      );
+    });
+  }, [productos, q]);
+
+  // ==========================
+  // 6) Carrito
+  // ==========================
+  const total = useMemo(() => {
+    return cart.reduce((acc, it) => acc + it.qty * it.precio_unitario, 0);
+  }, [cart]);
+
+  const cambio = useMemo(() => {
+    if (metodoPago !== "EFECTIVO") return 0;
+    const rec = Number(efectivoRecibido || 0);
+    return Math.max(0, rec - total);
+  }, [metodoPago, efectivoRecibido, total]);
+
+  const addToCart = (p: ProductoPublico) => {
+    if (!p || !p.id) return;
+
+    const precio = Number(p.precio_venta || 0);
+    if (precio <= 0) {
+      setError("Este producto no tiene precio de venta.");
+      return;
+    }
+
+    setCart((prev) => {
+      const idx = prev.findIndex((x) => x.producto_id === p.id);
+      if (idx >= 0) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], qty: copy[idx].qty + 1 };
+        return copy;
+      }
+      return [
+        ...prev,
+        {
+          producto_id: p.id,
+          nombre: p.nombre,
+          sku: p.sku,
+          codigo_barras: p.codigo_barras ?? null,
+          precio_unitario: precio,
+          qty: 1,
+        },
+      ];
+    });
+  };
+
+  const setQty = (producto_id: string, qty: number) => {
+    setCart((prev) =>
+      prev
+        .map((x) =>
+          x.producto_id === producto_id ? { ...x, qty: Math.max(1, qty) } : x
+        )
+        .filter(Boolean)
+    );
+  };
+
+  const removeItem = (producto_id: string) => {
+    setCart((prev) => prev.filter((x) => x.producto_id !== producto_id));
+  };
+
+  const clearCart = () => {
+    setCart([]);
+    setEfectivoRecibido("");
+    setError(null);
+  };
+
+  // ==========================
+  // ✅ NUEVO: Agregar por código directo (HID / global)
+  // ==========================
+  const agregarPorCodigo = (codeRaw: string) => {
+    const code = String(codeRaw || "").trim();
+    if (!code) return;
+
+    const p =
+      productos.find((x) => String(x.codigo_barras || "").trim() === code) ||
+      productos.find((x) => String(x.sku || "").trim() === code);
+
+    if (!p) {
+      setError("Código no encontrado.");
+      focusBarcode();
+      return;
+    }
+
+    addToCart(p);
+    setBarcodeInput("");
+    setError(null);
+    focusBarcode();
+  };
+
+  // ==========================
+  // 7) Scan / Enter por código (manual)
+  // ==========================
+  const buscarYAgregarPorCodigo = () => {
+    agregarPorCodigo(barcodeInput);
+  };
+
+  // ==========================
+  // ✅ NUEVO: Escaneo global para lectores tipo teclado (HID)
+  // ==========================
+  const scanBufferRef = useRef("");
+  const scanLastTimeRef = useRef<number>(0);
+  const scanTimerRef = useRef<any>(null);
+  const scanActiveRef = useRef(false);
+
+  useEffect(() => {
+    if (cajaEstado !== "ABIERTA") return;
+    if (showCerrarCaja) return; // si estás cerrando caja, no secuestramos teclado
+
+    const MIN_LEN = 3;
+    const FAST_MS = 45; // más estricto para no molestar el tecleo humano
+    const IDLE_MS = 140;
+
+    const finishScan = () => {
+      const code = scanBufferRef.current.trim();
+      scanBufferRef.current = "";
+      scanActiveRef.current = false;
+
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+
+      if (code.length >= MIN_LEN) {
+        agregarPorCodigo(code);
+      } else {
+        focusBarcode();
+      }
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const key = e.key;
+      const now = Date.now();
+      const delta = now - (scanLastTimeRef.current || 0);
+      scanLastTimeRef.current = now;
+
+      const isTerminator = key === "Enter" || key === "Tab";
+      const isChar = key.length === 1;
+
+      // Determina si parece escaneo: ya venía escaneando o teclas ultra rápidas
+      const looksLikeScan =
+        scanActiveRef.current || (isChar && delta > 0 && delta <= FAST_MS);
+
+      if (isTerminator) {
+        if (scanBufferRef.current.length >= MIN_LEN) {
+          e.preventDefault();
+          e.stopPropagation();
+          finishScan();
+        }
+        return;
+      }
+
+      if (!isChar) return;
+
+      if (!looksLikeScan) {
+        // Teclado humano normal: no tocar
+        return;
+      }
+
+      // Aquí ya es escaneo
+      scanActiveRef.current = true;
+      scanBufferRef.current += key;
+
+      // Evita que el escaneo ensucie otros inputs (buscar, efectivo, etc.)
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Si el lector no manda Enter, cerramos por “silencio”
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = setTimeout(() => {
+        if (scanActiveRef.current) finishScan();
+      }, IDLE_MS);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+      if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
+      scanTimerRef.current = null;
+      scanBufferRef.current = "";
+      scanActiveRef.current = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cajaEstado, showCerrarCaja, productos]);
+
+  // ✅ Bonus: cuando se abre la caja, enfoca el input de escaneo
+  useEffect(() => {
+    if (cajaEstado === "ABIERTA") {
+      setTimeout(() => focusBarcode(), 80);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cajaEstado]);
+
+  // ==========================
+  // 8) Confirmar venta (POST /api/sales/pos)
+  // ==========================
+  const confirmarVenta = async () => {
+    if (!token) return;
+
+    if (cajaEstado !== "ABIERTA") {
+      setError("Debes aperturar la caja antes de vender.");
+      return;
+    }
+
+    if (cart.length === 0) {
+      setError("El carrito está vacío.");
+      return;
+    }
+
+    if (metodoPago === "EFECTIVO") {
+      const rec = Number(efectivoRecibido || 0);
+      if (rec < total) {
+        setError("Efectivo insuficiente.");
+        return;
+      }
+    }
+
+    try {
+      setLoading(true);
+      setError(null);
+
+      const body = {
+        items: cart.map((x) => ({
+          producto_id: x.producto_id,
+          qty: x.qty,
+          precio_unitario: x.precio_unitario,
+        })),
+        metodo_pago: metodoPago,
+        efectivo_recibido:
+          metodoPago === "EFECTIVO" ? Number(efectivoRecibido || 0) : null,
+      };
+
+      const res = await fetch(`${API_URL}/api/sales/pos`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify(body),
+      });
+
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.message || "Error al registrar venta");
+
+      imprimirTicket(data?.venta_id, total, cambio);
+
+      clearCart();
+      // Si quieres refrescar stock:
+      // await cargarPublico();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Error al registrar venta");
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const imprimirTicket = (
+    ventaId: string,
+    totalVenta: number,
+    cambioLocal: number
+  ) => {
+    if (typeof window === "undefined") return;
+
+    const w = window.open("", "_blank");
+    if (!w) return;
+
+    const rows = cart
+      .map(
+        (it) => `
+        <tr>
+          <td style="padding:4px 0;">${escapeHtml(it.nombre)}</td>
+          <td style="padding:4px 0; text-align:right;">x${it.qty}</td>
+          <td style="padding:4px 0; text-align:right;">Q ${it.precio_unitario.toFixed(
+            2
+          )}</td>
+        </tr>
+      `
+      )
+      .join("");
+
+    w.document.open();
+    w.document.write(`
+      <!doctype html>
+      <html>
+        <head>
+          <meta charset="utf-8"/>
+          <title>Ticket</title>
+          <style>
+            body{font-family:Arial,sans-serif; padding:12px;}
+            h2{margin:0 0 8px;}
+            .muted{color:#666; font-size:12px;}
+            table{width:100%; border-collapse:collapse; margin-top:8px;}
+            hr{margin:10px 0;}
+          </style>
+        </head>
+        <body>
+          <h2>Ticket de venta</h2>
+          <div class="muted">Venta: ${escapeHtml(ventaId || "")}</div>
+          <div class="muted">${escapeHtml(new Date().toLocaleString("es-GT"))}</div>
+          <table>${rows}</table>
+          <hr/>
+          <div style="display:flex; justify-content:space-between;">
+            <b>Total</b><b>Q ${Number(totalVenta || 0).toFixed(2)}</b>
+          </div>
+          ${
+            metodoPago === "EFECTIVO"
+              ? `<div style="display:flex; justify-content:space-between; margin-top:6px;">
+                   <span>Cambio</span><b>Q ${Number(cambioLocal || 0).toFixed(
+                     2
+                   )}</b>
+                 </div>`
+              : ""
+          }
+          <hr/>
+          <div class="muted">Gracias. Vuelva pronto ✨</div>
+          <script>setTimeout(()=>window.print(), 200);</script>
+        </body>
+      </html>
+    `);
+    w.document.close();
+  };
+
+  const escapeHtml = (s: any) =>
+    String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+  const handleLogout = () => {
+    localStorage.removeItem("joyeria_token");
+    localStorage.removeItem("joyeria_user");
+    router.push("/login");
+  };
+
+  if (!user) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-[#2b0a0b] text-[#f1e4d4]">
+        Cargando sesión...
+      </div>
+    );
+  }
+
+  // ==========================
+  // UI: Pantalla de apertura
+  // ==========================
+  const renderApertura = () => {
+    const cerrado = cajaEstado === "CERRADA";
+
+    return (
+      <main className="flex-1 w-full max-w-4xl mx-auto px-4 md:px-8 py-8">
+        <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-6">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-lg font-semibold">Apertura de caja</h2>
+                <span className={estadoBadge(cajaEstado)}>{cajaEstado}</span>
+              </div>
+
+              <p className="text-xs text-[#c9b296] mt-2">
+                Antes de vender, ingresa el efectivo inicial con el que empieza
+                la caja.
+              </p>
+            </div>
+
+            <button
+              type="button"
+              onClick={verificarCajaHoy}
+              className="rounded-full border border-[#7a2b33] px-3 py-1.5 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80 disabled:opacity-40"
+              disabled={loadingCaja}
+            >
+              ⟳ Verificar
+            </button>
+          </div>
+
+          <div className="mt-6 grid gap-4 md:grid-cols-2">
+            <div className="bg-[#2b0a0b]/50 border border-[#5a1b22] rounded-2xl p-4">
+              <label className="text-[11px] text-[#c9b296] block mb-2">
+                Monto de apertura (efectivo inicial)
+              </label>
+
+              <div className="flex items-center gap-2">
+                <span className="text-[#e3c578] text-sm font-semibold">Q</span>
+                <input
+                  value={montoApertura}
+                  onChange={(e) => setMontoApertura(e.target.value)}
+                  placeholder="0.00"
+                  inputMode="decimal"
+                  className="flex-1 rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-4 py-2 text-sm text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                  disabled={cerrado}
+                />
+              </div>
+
+              <button
+                type="button"
+                onClick={aperturarCaja}
+                disabled={loadingCaja || cerrado}
+                className="w-full mt-4 rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-3 text-sm font-semibold disabled:opacity-40"
+              >
+                ✅ Aperturar caja
+              </button>
+
+              <p className="text-[11px] text-[#c9b296] mt-3">
+                Si ya estaba abierta, el sistema no duplica registros: solo te
+                deja entrar sin drama.
+              </p>
+
+              {cerrado && (
+                <div className="mt-3 text-[11px] text-amber-200/90">
+                  Hoy ya está <b>cerrada</b>. Si tu operación requiere reabrir el
+                  mismo día, se habilita desde backend (y ya casi lo tienes
+                  listo).
+                </div>
+              )}
+            </div>
+
+            <div className="bg-[#2b0a0b]/50 border border-[#5a1b22] rounded-2xl p-4">
+              <div className="text-[11px] text-[#c9b296]">Estado actual</div>
+
+              <div className="mt-2 text-sm">
+                {loadingCaja ? (
+                  <span className="text-[#c9b296]">Verificando…</span>
+                ) : (
+                  <span className="font-semibold text-[#f8f1e6]">
+                    {cajaEstado === "SIN_APERTURA" && "SIN APERTURA"}
+                    {cajaEstado === "ABIERTA" && "ABIERTA"}
+                    {cajaEstado === "CERRADA" && "CERRADA"}
+                    {cajaEstado === "CARGANDO" && "CARGANDO"}
+                  </span>
+                )}
+              </div>
+
+              {cierreActual && (
+                <div className="mt-4 text-xs text-[#c9b296] space-y-1">
+                  <div>
+                    <b className="text-[#f1e4d4]">Inicio:</b>{" "}
+                    {new Date(cierreActual.fecha_inicio).toLocaleString("es-GT")}
+                  </div>
+                  {cierreActual.fecha_fin && (
+                    <div>
+                      <b className="text-[#f1e4d4]">Fin:</b>{" "}
+                      {new Date(cierreActual.fecha_fin).toLocaleString("es-GT")}
+                    </div>
+                  )}
+                  <div>
+                    <b className="text-[#f1e4d4]">Apertura:</b>{" "}
+                    {fmtQ(cierreActual.monto_apertura)}
+                  </div>
+
+                  {cajaEstado === "CERRADA" && (
+                    <div className="pt-2 mt-2 border-t border-[#5a1b22] space-y-1">
+                      <div className="flex justify-between">
+                        <span>Efectivo</span>
+                        <b className="text-[#f1e4d4]">
+                          {fmtQ(cierreActual.total_efectivo)}
+                        </b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Transferencia</span>
+                        <b className="text-[#f1e4d4]">
+                          {fmtQ(cierreActual.total_transferencia)}
+                        </b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Tarjeta</span>
+                        <b className="text-[#f1e4d4]">
+                          {fmtQ(cierreActual.total_tarjeta)}
+                        </b>
+                      </div>
+                      <div className="flex justify-between">
+                        <span>Total</span>
+                        <b className="text-[#e3c578]">
+                          {fmtQ(cierreActual.total_general)}
+                        </b>
+                      </div>
+
+                      {cierreActual.monto_cierre_reportado != null && (
+                        <div className="flex justify-between">
+                          <span>Contado</span>
+                          <b className="text-[#f1e4d4]">
+                            {fmtQ(cierreActual.monto_cierre_reportado)}
+                          </b>
+                        </div>
+                      )}
+
+                      {cierreActual.diferencia != null && (
+                        <div className="flex justify-between">
+                          <span>Diferencia</span>
+                          <b
+                            className={
+                              Number(cierreActual.diferencia) === 0
+                                ? "text-emerald-200"
+                                : "text-amber-200"
+                            }
+                          >
+                            {fmtQ(cierreActual.diferencia)}
+                          </b>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        </section>
+      </main>
+    );
+  };
+
+  // ==========================
+  // UI: POS (lo que ya tenías)
+  // ==========================
+  const renderPOS = () => {
+    return (
+      <>
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 grid gap-4 md:grid-cols-2">
+          {/* Productos */}
+          <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4">
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
+              <h2 className="text-sm font-semibold">Productos</h2>
+
+              <div className="flex items-center gap-2">
+                <input
+                  ref={barcodeRef}
+                  value={barcodeInput}
+                  onChange={(e) => setBarcodeInput(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") buscarYAgregarPorCodigo();
+                  }}
+                  placeholder="Escanear / escribir código y Enter"
+                  className="w-60 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                />
+                <button
+                  type="button"
+                  onClick={buscarYAgregarPorCodigo}
+                  className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1 text-[11px]"
+                >
+                  Agregar
+                </button>
+              </div>
+            </div>
+
+            {loading && <p className="text-xs text-[#c9b296]">Cargando…</p>}
+
+            <div className="overflow-x-auto">
+              <table className="min-w-full text-xs">
+                <thead>
+                  <tr className="text-[#c9b296] border-b border-[#5a1b22]">
+                    <th className="text-left py-2 px-2">Nombre</th>
+                    <th className="text-right py-2 px-2">Precio</th>
+                    <th className="text-center py-2 px-2">+</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {!loading && productosFiltrados.length === 0 && (
+                    <tr>
+                      <td
+                        colSpan={3}
+                        className="py-4 text-center text-[#b39878]"
+                      >
+                        No hay productos para mostrar.
+                      </td>
+                    </tr>
+                  )}
+
+                  {productosFiltrados.map((p) => (
+                    <tr
+                      key={p.id}
+                      className="border-b border-[#3a0d12]/70 hover:bg-[#3a0d12]/70"
+                    >
+                      <td className="py-2 px-2 text-[#f8f1e6]">
+                        <div className="font-medium">{p.nombre}</div>
+                        <div className="text-[11px] text-[#c9b296]">
+                          {p.sku} {p.codigo_barras ? `• ${p.codigo_barras}` : ""}
+                        </div>
+                      </td>
+                      <td className="py-2 px-2 text-right text-[#e3c578]">
+                        {fmtQ(p.precio_venta)}
+                      </td>
+                      <td className="py-2 px-2 text-center">
+                        <button
+                          type="button"
+                          onClick={() => addToCart(p)}
+                          className="text-[11px] rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 px-3 py-1 hover:bg-[#d6b25f]/20"
+                        >
+                          Añadir
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+
+          {/* Carrito */}
+          <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4">
+            <div className="flex items-center justify-between mb-3">
+              <h2 className="text-sm font-semibold">Carrito</h2>
+              <button
+                type="button"
+                onClick={clearCart}
+                className="text-[11px] rounded-full border border-[#7a2b33] px-3 py-1 hover:bg-[#4b141a]/80"
+              >
+                Vaciar
+              </button>
+            </div>
+
+            {cart.length === 0 ? (
+              <p className="text-xs text-[#c9b296]">
+                Agrega productos para iniciar una venta.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {cart.map((it) => (
+                  <div
+                    key={it.producto_id}
+                    className="border border-[#5a1b22] rounded-xl p-3 bg-[#2b0a0b]/40"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-semibold">{it.nombre}</div>
+                        <div className="text-[11px] text-[#c9b296]">
+                          {it.sku}{" "}
+                          {it.codigo_barras ? `• ${it.codigo_barras}` : ""}
+                        </div>
+                      </div>
+
+                      <button
+                        type="button"
+                        onClick={() => removeItem(it.producto_id)}
+                        className="text-[11px] rounded-full border border-[#7a2b33] px-2 py-0.5 hover:bg-[#4b141a]/80"
+                      >
+                        Quitar
+                      </button>
+                    </div>
+
+                    <div className="flex items-center justify-between mt-2">
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setQty(it.producto_id, it.qty - 1)}
+                          className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
+                        >
+                          −
+                        </button>
+                        <input
+                          value={it.qty}
+                          onChange={(e) =>
+                            setQty(
+                              it.producto_id,
+                              Number(e.target.value || 1)
+                            )
+                          }
+                          className="w-14 text-center rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-2 py-1 text-[11px]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setQty(it.producto_id, it.qty + 1)}
+                          className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
+                        >
+                          +
+                        </button>
+                      </div>
+
+                      <div className="text-[11px] text-[#e3c578]">
+                        {fmtQ(it.qty * it.precio_unitario)}
+                      </div>
+                    </div>
+                  </div>
+                ))}
+
+                <div className="border-t border-[#5a1b22] pt-3 mt-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-[11px] text-[#c9b296]">
+                      Método de pago
+                    </span>
+                    <select
+                      value={metodoPago}
+                      onChange={(e) =>
+                        setMetodoPago(e.target.value as MetodoPago)
+                      }
+                      className="rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
+                    >
+                      <option value="EFECTIVO">EFECTIVO</option>
+                      <option value="TARJETA">TARJETA</option>
+                      <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                    </select>
+                  </div>
+
+                  {metodoPago === "EFECTIVO" && (
+                    <div className="flex items-center justify-between">
+                      <span className="text-[11px] text-[#c9b296]">
+                        Efectivo recibido
+                      </span>
+                      <input
+                        value={efectivoRecibido}
+                        onChange={(e) => setEfectivoRecibido(e.target.value)}
+                        placeholder="0.00"
+                        className="w-32 text-right rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center justify-between text-sm">
+                    <b>Total</b>
+                    <b className="text-[#e3c578]">{fmtQ(total)}</b>
+                  </div>
+
+                  {metodoPago === "EFECTIVO" && (
+                    <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
+                      <span>Cambio</span>
+                      <span className="text-[#f1e4d4]">{fmtQ(cambio)}</span>
+                    </div>
+                  )}
+
+                  <button
+                    type="button"
+                    onClick={confirmarVenta}
+                    disabled={loading}
+                    className="w-full rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-3 text-sm font-semibold disabled:opacity-40"
+                  >
+                    ✅ Confirmar venta
+                  </button>
+                </div>
+              </div>
+            )}
+          </section>
+        </main>
+      </>
+    );
+  };
+
+  return (
+    <div className="min-h-screen bg-[#2b0a0b] text-[#f8f1e6] flex flex-col md:flex-row">
+      <AdminSidebar user={user} onLogout={handleLogout} />
+
+      <div className="flex-1 flex flex-col">
+        {/* Header “general” para el módulo Caja */}
+        <header className="border-b border-[#5a1b22] bg-[#2b0a0b]/80 backdrop-blur px-4 md:px-8 py-4">
+          <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+            <div>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl md:text-2xl font-semibold">
+                  Panel de Caja
+                </h1>
+                <span className={estadoBadge(cajaEstado)}>{cajaEstado}</span>
+              </div>
+              <p className="text-xs md:text-sm text-[#c9b296] capitalize">
+                {today}
+              </p>
+
+              {cajaEstado === "ABIERTA" && (
+                <p className="text-[11px] text-[#b39878] mt-1">
+                  Apertura: {fmtQ(cierreActual?.monto_apertura ?? 0)}
+                </p>
+              )}
+            </div>
+
+            <div className="flex items-center gap-2 justify-end">
+              {/* ✅ NUEVO: cerrar caja (solo si está ABIERTA) */}
+              {cajaEstado === "ABIERTA" && (
+                <button
+                  type="button"
+                  onClick={() => setShowCerrarCaja((v) => !v)}
+                  className="rounded-full border border-amber-400/30 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-100 hover:bg-amber-400/15 disabled:opacity-40"
+                  disabled={loadingCaja}
+                  title="Cerrar caja"
+                >
+                  ⛔ Cerrar caja
+                </button>
+              )}
+
+              <button
+                type="button"
+                onClick={verificarCajaHoy}
+                className="rounded-full border border-[#7a2b33] px-3 py-1.5 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80 disabled:opacity-40"
+                disabled={loadingCaja}
+              >
+                ⟳ Verificar caja
+              </button>
+            </div>
+          </div>
+
+          {/* ✅ Panel profesional para cierre */}
+          {cajaEstado === "ABIERTA" && showCerrarCaja && (
+            <div className="mt-4 bg-[#3a0d12]/70 border border-[#5a1b22] rounded-2xl p-4">
+              <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">Cierre de caja</div>
+                  <div className="text-[11px] text-[#c9b296] mt-1">
+                    Ingresa el efectivo contado (opcional). El sistema calcula
+                    totales y guarda diferencia.
+                  </div>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2">
+                    <span className="text-[#e3c578] text-sm font-semibold">
+                      Q
+                    </span>
+                    <input
+                      value={montoCierreReportado}
+                      onChange={(e) => setMontoCierreReportado(e.target.value)}
+                      placeholder="(opcional)"
+                      inputMode="decimal"
+                      className="w-40 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                      disabled={loadingCaja}
+                    />
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={cerrarCaja}
+                    disabled={loadingCaja}
+                    className="rounded-2xl border border-amber-400/30 bg-amber-400/10 hover:bg-amber-400/15 px-4 py-2 text-[11px] font-semibold text-amber-100 disabled:opacity-40"
+                  >
+                    ✅ Confirmar cierre
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => setShowCerrarCaja(false)}
+                    className="rounded-2xl border border-[#7a2b33] hover:bg-[#4b141a]/80 px-4 py-2 text-[11px] text-[#f1e4d4]"
+                    disabled={loadingCaja}
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {!!error && (
+            <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>
+          )}
+        </header>
+
+        {/* Contenido según estado */}
+        {cajaEstado === "CARGANDO" || loadingCaja ? (
+          <div className="flex-1 flex items-center justify-center text-[#c9b296]">
+            Verificando estado de caja…
+          </div>
+        ) : cajaEstado === "ABIERTA" ? (
+          renderPOS()
+        ) : (
+          renderApertura()
+        )}
+      </div>
+    </div>
+  );
+}

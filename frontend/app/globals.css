@@ -1,0 +1,41 @@
+@import "tailwindcss";
+
+:root {
+  --background: #2b0a0b;
+  --foreground: #f8f1e6;
+  --brand-deep: #2b0a0b;
+  --brand-surface: #3a0d12;
+  --brand-rose: #5a1b22;
+  --brand-gold: #d6b25f;
+  --brand-gold-soft: #f0d99a;
+  --brand-cream: #f8f1e6;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-body);
+  --font-mono: var(--font-body);
+}
+
+body {
+  background: radial-gradient(
+      1200px 600px at 10% 10%,
+      rgba(214, 178, 95, 0.15),
+      transparent 60%
+    ),
+    radial-gradient(
+      900px 480px at 90% 20%,
+      rgba(110, 35, 43, 0.25),
+      transparent 55%
+    ),
+    var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body), "Segoe UI", system-ui, sans-serif;
+  min-height: 100vh;
+}
+
+.font-display {
+  font-family: var(--font-display), "Times New Roman", serif;
+  letter-spacing: 0.01em;
+}
