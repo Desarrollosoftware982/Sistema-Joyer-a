@@ -5,7 +5,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ IMPORTANTE (Render / 1 solo service):
+// - En producción NO uses localhost:4000
+// - Usamos same-origin: window.location.origin o un NEXT_PUBLIC_API_URL si lo defines
+const API_URL =
+  (process.env.NEXT_PUBLIC_API_URL &&
+    process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/$/, "")) ||
+  (typeof window !== "undefined" ? window.location.origin : "");
 
 interface User {
   id: string;
@@ -58,7 +64,7 @@ export default function CajaPage() {
   const [cierreActual, setCierreActual] = useState<CierreCaja | null>(null);
   const [montoApertura, setMontoApertura] = useState<string>("");
 
-  // ✅ NUEVO: cierre de caja (opcional)
+  // ✅ cierre de caja (opcional)
   const [showCerrarCaja, setShowCerrarCaja] = useState(false);
   const [montoCierreReportado, setMontoCierreReportado] = useState<string>("");
 
@@ -476,7 +482,7 @@ export default function CajaPage() {
     if (showCerrarCaja) return; // si estás cerrando caja, no secuestramos teclado
 
     const MIN_LEN = 3;
-    const FAST_MS = 45; // más estricto para no molestar el tecleo humano
+    const FAST_MS = 45;
     const IDLE_MS = 140;
 
     const finishScan = () => {
@@ -505,7 +511,6 @@ export default function CajaPage() {
       const isTerminator = key === "Enter" || key === "Tab";
       const isChar = key.length === 1;
 
-      // Determina si parece escaneo: ya venía escaneando o teclas ultra rápidas
       const looksLikeScan =
         scanActiveRef.current || (isChar && delta > 0 && delta <= FAST_MS);
 
@@ -521,19 +526,15 @@ export default function CajaPage() {
       if (!isChar) return;
 
       if (!looksLikeScan) {
-        // Teclado humano normal: no tocar
         return;
       }
 
-      // Aquí ya es escaneo
       scanActiveRef.current = true;
       scanBufferRef.current += key;
 
-      // Evita que el escaneo ensucie otros inputs (buscar, efectivo, etc.)
       e.preventDefault();
       e.stopPropagation();
 
-      // Si el lector no manda Enter, cerramos por “silencio”
       if (scanTimerRef.current) clearTimeout(scanTimerRef.current);
       scanTimerRef.current = setTimeout(() => {
         if (scanActiveRef.current) finishScan();
@@ -614,8 +615,6 @@ export default function CajaPage() {
       imprimirTicket(data?.venta_id, total, cambio);
 
       clearCart();
-      // Si quieres refrescar stock:
-      // await cargarPublico();
     } catch (e: any) {
       console.error(e);
       setError(e?.message ?? "Error al registrar venta");
@@ -779,8 +778,7 @@ export default function CajaPage() {
               {cerrado && (
                 <div className="mt-3 text-[11px] text-amber-200/90">
                   Hoy ya está <b>cerrada</b>. Si tu operación requiere reabrir el
-                  mismo día, se habilita desde backend (y ya casi lo tienes
-                  listo).
+                  mismo día, se habilita desde backend.
                 </div>
               )}
             </div>
@@ -881,7 +879,6 @@ export default function CajaPage() {
 
   // ==========================
   // UI: POS
-  // ✅ IMPLEMENTADO: input de búsqueda real (ya tenías el state + filtro, faltaba el UI)
   // ==========================
   const renderPOS = () => {
     return (
@@ -892,7 +889,6 @@ export default function CajaPage() {
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
               <h2 className="text-sm font-semibold">Productos</h2>
 
-              {/* ✅ NUEVO (sin romper nada): búsqueda + escaneo */}
               <div className="flex flex-col sm:flex-row sm:items-center gap-2">
                 <div className="flex items-center gap-2">
                   <input
@@ -935,7 +931,6 @@ export default function CajaPage() {
               </div>
             </div>
 
-            {/* ✅ Indicador útil (no afecta lógica) */}
             <div className="mb-2 text-[11px] text-[#c9b296] flex items-center justify-between">
               <span>
                 Mostrando{" "}
@@ -1149,7 +1144,6 @@ export default function CajaPage() {
       <AdminSidebar user={user} onLogout={handleLogout} />
 
       <div className="flex-1 flex flex-col">
-        {/* Header “general” para el módulo Caja */}
         <header className="border-b border-[#5a1b22] bg-[#2b0a0b]/80 backdrop-blur px-4 md:px-8 py-4">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
@@ -1171,7 +1165,6 @@ export default function CajaPage() {
             </div>
 
             <div className="flex items-center gap-2 justify-end">
-              {/* ✅ cerrar caja (solo si está ABIERTA) */}
               {cajaEstado === "ABIERTA" && (
                 <button
                   type="button"
@@ -1195,7 +1188,6 @@ export default function CajaPage() {
             </div>
           </div>
 
-          {/* Panel para cierre */}
           {cajaEstado === "ABIERTA" && showCerrarCaja && (
             <div className="mt-4 bg-[#3a0d12]/70 border border-[#5a1b22] rounded-2xl p-4">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
@@ -1249,7 +1241,6 @@ export default function CajaPage() {
           )}
         </header>
 
-        {/* Contenido según estado */}
         {cajaEstado === "CARGANDO" || loadingCaja ? (
           <div className="flex-1 flex items-center justify-center text-[#c9b296]">
             Verificando estado de caja…
