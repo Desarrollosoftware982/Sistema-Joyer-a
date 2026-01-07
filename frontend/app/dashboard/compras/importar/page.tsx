@@ -1,6 +1,7 @@
+// frontend/app/dashboard/compras/importar/page.tsx
 "use client";
 
-import { useEffect, useState, type ChangeEvent } from "react";
+import { useEffect, useMemo, useState, type ChangeEvent } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../../_components/AdminSidebar";
 
@@ -8,7 +9,28 @@ import * as XLSX from "xlsx";
 import jsPDF from "jspdf";
 import JsBarcode from "jsbarcode";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+/**
+ * ✅ En producción (misma app / mismo dominio): usa rutas relativas "/api/..."
+ * ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta (ej. http://localhost:4000)
+ */
+const API_BASE_RAW =
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, "");
+
+function buildApiUrl(path: string) {
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -23,7 +45,7 @@ interface ImportItem {
   nombre_producto: string;
   categoria?: string;
   costo_compra: number;
-  costo_envio: number; // se mantiene por compatibilidad, aunque no lo mostremos
+  costo_envio: number; // se mantiene por compatibilidad
   costo_impuestos: number;
   costo_desaduanaje: number;
   cantidad: number;
@@ -41,7 +63,7 @@ interface ImportResumenItem {
 }
 
 interface LabelToPrint {
-  producto_id?: string; // puede venir del backend o no
+  producto_id?: string;
   sku: string;
   nombre: string;
   codigo_barras: string;
@@ -74,7 +96,7 @@ export default function ImportComprasPage() {
   const [serverMessage, setServerMessage] = useState<string | null>(null);
   const [resumen, setResumen] = useState<ImportResumenItem[]>([]);
   const [labelsToPrint, setLabelsToPrint] = useState<LabelToPrint[]>([]);
-  const [labelsLocal, setLabelsLocal] = useState<LabelToPrint[]>([]); // ✅ etiquetas de códigos generados en FE
+  const [labelsLocal, setLabelsLocal] = useState<LabelToPrint[]>([]); // ✅ solo los generados en FE
 
   const today = new Date().toLocaleDateString("es-GT", {
     weekday: "long",
@@ -111,7 +133,7 @@ export default function ImportComprasPage() {
   };
 
   // ==========================
-  // 2) Descargar plantilla CSV (sin envío)
+  // 2) Descargar plantilla CSV
   // ==========================
   const handleDownloadTemplate = () => {
     const header =
@@ -162,8 +184,18 @@ export default function ImportComprasPage() {
 
     const lower = s.toLowerCase();
     const bad = new Set([
-      "-", "—", "–", "−", "_",
-      "na", "n/a", "null", "none", "sin", "s/c", "sc",
+      "-",
+      "—",
+      "–",
+      "−",
+      "_",
+      "na",
+      "n/a",
+      "null",
+      "none",
+      "sin",
+      "s/c",
+      "sc",
     ]);
 
     if (bad.has(lower)) return true;
@@ -172,12 +204,11 @@ export default function ImportComprasPage() {
   };
 
   // ==========================
-  // ✅ Generar EAN-13 válido (con dígito verificador)
+  // ✅ Generar EAN-13 válido
   // ==========================
   const computeEan13CheckDigit = (base12: string) => {
-    // base12 debe ser de 12 dígitos
-    let sumOdd = 0;  // posiciones 1,3,5,... (0,2,4...)
-    let sumEven = 0; // posiciones 2,4,6,... (1,3,5...)
+    let sumOdd = 0;
+    let sumEven = 0;
     for (let i = 0; i < 12; i++) {
       const d = Number(base12[i] || "0");
       if (i % 2 === 0) sumOdd += d;
@@ -188,15 +219,18 @@ export default function ImportComprasPage() {
     return (10 - mod) % 10;
   };
 
+  /**
+   * ✅ Prefijo "20" para distinguir nuestros auto-generados.
+   * (Útil para filtrar qué etiquetas imprimir.)
+   */
   const generateEan13Unique = (idx: number, seen: Set<string>) => {
     for (let tries = 0; tries < 80; tries++) {
       const rnd = Math.floor(Math.random() * 1_000_000)
         .toString()
         .padStart(6, "0");
       const seed = `${Date.now()}${rnd}${String(idx).padStart(3, "0")}`;
-
       const last10 = seed.slice(-10).padStart(10, "0");
-      const base12 = `20${last10}`; // 12 dígitos (prefijo "20" para separar de tus códigos tipo X...)
+      const base12 = `20${last10}`;
       const cd = computeEan13CheckDigit(base12);
       const ean13 = `${base12}${cd}`;
 
@@ -206,7 +240,6 @@ export default function ImportComprasPage() {
       }
     }
 
-    // fallback ultra raro
     while (true) {
       const last10 = Math.floor(Math.random() * 10_000_000_000)
         .toString()
@@ -220,6 +253,8 @@ export default function ImportComprasPage() {
       }
     }
   };
+
+  const isEan13 = (code: string) => /^\d{13}$/.test(code);
 
   // ==========================
   // Helpers: categoría / SKU
@@ -260,8 +295,10 @@ export default function ImportComprasPage() {
     if (k.startsWith("e_") || k.includes("e_arete") || k.includes("arete")) return CANON_CATEGORIAS.ARETES;
     if (k.startsWith("n_") || k.includes("n_cadena") || k.includes("cadena")) return CANON_CATEGORIAS.CADENAS;
     if (k.startsWith("a_") || k.includes("a_tobillera") || k.includes("tobillera")) return CANON_CATEGORIAS.TOBILLERAS;
-    if (k.startsWith("b_") || k.includes("b_razalete") || k.includes("brazalete") || k.includes("razalete")) return CANON_CATEGORIAS.BRAZALETES;
-    if (k.startsWith("p_") || k.includes("p_endiente") || k.includes("pendiente") || k.includes("endiente")) return CANON_CATEGORIAS.PENDIENTES;
+    if (k.startsWith("b_") || k.includes("b_razalete") || k.includes("brazalete") || k.includes("razalete"))
+      return CANON_CATEGORIAS.BRAZALETES;
+    if (k.startsWith("p_") || k.includes("p_endiente") || k.includes("pendiente") || k.includes("endiente"))
+      return CANON_CATEGORIAS.PENDIENTES;
     if (k.startsWith("bw") || k.includes("pulsera")) return CANON_CATEGORIAS.PULSERAS;
     if (k.includes("set")) return CANON_CATEGORIAS.SETS;
 
@@ -340,7 +377,15 @@ export default function ImportComprasPage() {
       if (hasAny("articulo", "nombre_producto", "producto", "descripcion", "item", "nombre")) score += 3;
       if (hasAny("cantidad", "qty", "cant")) score += 3;
 
-      if (hasAny("precio_unitario_compra_q", "precio_unitario_compra", "precio_unitario_q", "precio_unitario", "costo_compra")) {
+      if (
+        hasAny(
+          "precio_unitario_compra_q",
+          "precio_unitario_compra",
+          "precio_unitario_q",
+          "precio_unitario",
+          "costo_compra"
+        )
+      ) {
         score += 3;
       }
 
@@ -414,7 +459,7 @@ export default function ImportComprasPage() {
     const idxNombre = getIndex("nombre_producto");
     const idxCategoria = getIndex("categoria");
     const idxCostoCompra = getIndex("costo_compra");
-    const idxCostoEnvio = getIndex("costo_envio"); // opcional aunque no esté en plantilla
+    const idxCostoEnvio = getIndex("costo_envio");
     const idxCostoImpuestos = getIndex("costo_impuestos");
     const idxCostoDesaduanaje = getIndex("costo_desaduanaje");
     const idxCantidad = getIndex("cantidad");
@@ -423,7 +468,7 @@ export default function ImportComprasPage() {
       throw new Error("La plantilla debe contener al menos: nombre_producto, costo_compra, cantidad.");
     }
 
-    const toNumber = (value: string | undefined): number => {
+    const toNumberMoney = (value: string | undefined): number => {
       if (!value) return 0;
       let s = String(value).trim();
       s = s.replace(/[^\d.,-]/g, "");
@@ -450,11 +495,11 @@ export default function ImportComprasPage() {
       const nombre_producto = idxNombre >= 0 ? String(row[idxNombre] ?? "").trim() : "";
       const categoria_raw = idxCategoria >= 0 ? String(row[idxCategoria] ?? "").trim() : "";
 
-      const costo_compra = idxCostoCompra >= 0 ? toNumber(row[idxCostoCompra]) : 0;
-      const costo_envio = idxCostoEnvio >= 0 ? toNumber(row[idxCostoEnvio]) : 0;
-      const costo_impuestos = idxCostoImpuestos >= 0 ? toNumber(row[idxCostoImpuestos]) : 0;
-      const costo_desaduanaje = idxCostoDesaduanaje >= 0 ? toNumber(row[idxCostoDesaduanaje]) : 0;
-      const cantidad = idxCantidad >= 0 ? toNumber(row[idxCantidad]) : 0;
+      const costo_compra = idxCostoCompra >= 0 ? toNumberMoney(row[idxCostoCompra]) : 0;
+      const costo_envio = idxCostoEnvio >= 0 ? toNumberMoney(row[idxCostoEnvio]) : 0;
+      const costo_impuestos = idxCostoImpuestos >= 0 ? toNumberMoney(row[idxCostoImpuestos]) : 0;
+      const costo_desaduanaje = idxCostoDesaduanaje >= 0 ? toNumberMoney(row[idxCostoDesaduanaje]) : 0;
+      const cantidad = idxCantidad >= 0 ? toNumberMoney(row[idxCantidad]) : 0;
 
       if (!nombre_producto && !sku_raw && !codigo_barras_raw) continue;
       if (!cantidad || cantidad <= 0) continue;
@@ -474,10 +519,8 @@ export default function ImportComprasPage() {
       if (wasAuto) {
         codigo_barras_final = generateEan13Unique(i, seenBarcodes);
       } else {
-        // si vino algo real, lo respetamos y solo evitamos duplicados dentro del archivo
         if (codigo_barras_final) {
           if (seenBarcodes.has(codigo_barras_final)) {
-            // si repetido en el archivo, generamos uno nuevo para no explotar después
             codigo_barras_final = generateEan13Unique(i, seenBarcodes);
           } else {
             seenBarcodes.add(codigo_barras_final);
@@ -499,6 +542,7 @@ export default function ImportComprasPage() {
         cantidad,
       });
 
+      // ✅ SOLO etiquetas de los códigos generados en FE (los que venían vacíos/placeholder)
       if (wasAuto) {
         labels.push({
           sku,
@@ -608,7 +652,13 @@ export default function ImportComprasPage() {
       const cantidad = toNumberMoney(pick(row, ["cantidad", "qty", "cant"]));
 
       const costoUnitQ = toNumberMoney(
-        pick(row, ["costo_compra", "precio_unitario_compra_q", "precio_unitario_compra", "precio_unitario_q", "precio_unitario"])
+        pick(row, [
+          "costo_compra",
+          "precio_unitario_compra_q",
+          "precio_unitario_compra",
+          "precio_unitario_q",
+          "precio_unitario",
+        ])
       );
 
       const costoTotalQ = toNumberMoney(pick(row, ["precio_total_q", "precio_total", "total_q_producto"]));
@@ -677,6 +727,7 @@ export default function ImportComprasPage() {
       );
     }
 
+    // Distribución proporcional de pagos globales si no venían por fila
     const sumBase = itemsParsed.reduce((acc, it) => acc + it.costo_compra * it.cantidad, 0);
 
     if (sumBase > 0) {
@@ -685,7 +736,7 @@ export default function ImportComprasPage() {
           const base = it.costo_compra * it.cantidad;
           const share = base / sumBase;
           const totalLinea = totalImpuestosGlobal * share;
-          it.costo_impuestos = round2(totalLinea / it.cantidad);
+          it.costo_impuestos = Math.round(((totalLinea / it.cantidad) + Number.EPSILON) * 100) / 100;
         });
       }
 
@@ -694,7 +745,7 @@ export default function ImportComprasPage() {
           const base = it.costo_compra * it.cantidad;
           const share = base / sumBase;
           const totalLinea = totalDesaduanajeGlobal * share;
-          it.costo_desaduanaje = round2(totalLinea / it.cantidad);
+          it.costo_desaduanaje = Math.round(((totalLinea / it.cantidad) + Number.EPSILON) * 100) / 100;
         });
       }
 
@@ -703,7 +754,7 @@ export default function ImportComprasPage() {
           const base = it.costo_compra * it.cantidad;
           const share = base / sumBase;
           const totalLinea = totalEnvioGlobal * share;
-          it.costo_envio = round2(totalLinea / it.cantidad);
+          it.costo_envio = Math.round(((totalLinea / it.cantidad) + Number.EPSILON) * 100) / 100;
         });
       }
     }
@@ -779,6 +830,9 @@ export default function ImportComprasPage() {
     }
   };
 
+  // ✅ Ayuda visual: cuántos códigos se generaron automáticamente
+  const autoLabelsCount = useMemo(() => labelsLocal.length, [labelsLocal]);
+
   // ==========================
   // 4) Enviar importación
   // ==========================
@@ -802,10 +856,10 @@ export default function ImportComprasPage() {
         moneda: "GTQ",
         tipoCambio: 1,
         margenDefault: 0.4,
-        items, // ✅ ya incluye código de barras real (si faltaba, fue generado aquí)
+        items, // ✅ ya incluye barcode real (si faltaba, fue generado aquí)
       };
 
-      const res = await fetch(`${API_URL}/api/purchases/import`, {
+      const res = await fetch(buildApiUrl(`/api/purchases/import`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -823,9 +877,21 @@ export default function ImportComprasPage() {
       setServerMessage(data.message || "Compra importada y confirmada correctamente.");
       setResumen(data.data?.resumen ?? []);
 
-      // ✅ Si backend no envía labelsToPrint (porque ya mandamos barcode), usamos las locales
-      const serverLabels = data.data?.labelsToPrint ?? [];
-      setLabelsToPrint(serverLabels.length ? serverLabels : labelsLocal);
+      /**
+       * ✅ MUY IMPORTANTE:
+       * - Queremos imprimir SOLO los códigos que se generaron automáticamente en FE.
+       * - Si el backend manda labelsToPrint (a veces manda todos), filtramos por los auto-generados.
+       * - Si no manda nada, usamos los locales.
+       */
+      const localSkuSet = new Set(labelsLocal.map((x) => x.sku));
+      const localCodeSet = new Set(labelsLocal.map((x) => x.codigo_barras));
+
+      const serverLabels = (data.data?.labelsToPrint ?? []) as LabelToPrint[];
+      const filteredServerLabels = serverLabels.filter(
+        (l) => localSkuSet.has(l.sku) || localCodeSet.has(l.codigo_barras)
+      );
+
+      setLabelsToPrint(filteredServerLabels.length ? filteredServerLabels : labelsLocal);
     } catch (err: any) {
       console.error(err);
       setServerError(err?.message || "No se pudo completar la importación masiva.");
@@ -835,40 +901,50 @@ export default function ImportComprasPage() {
   };
 
   // ==========================
-  // 5) Generar PDF con todas las etiquetas
+  // 5) PDF con etiquetas (solo auto-generadas)
   // ==========================
   const handleDownloadLabelsPdf = () => {
     if (!labelsToPrint.length) return;
     if (typeof window === "undefined") return;
 
+    // ✅ Diseño que NO se sale de A4 (mm)
     const doc = new jsPDF({ unit: "mm", format: "a4" });
 
-    const marginX = 8;
-    const marginY = 8;
-    const labelWidth = 60;
-    const labelHeight = 30;
+    const marginX = 6;
+    const marginY = 6;
+
+    // ✅ Etiqueta estándar: 50 x 25 mm
+    const labelWidth = 50;
+    const labelHeight = 25;
+
+    const gapX = 4;
+    const gapY = 4;
+
     const cols = 3;
-    const rowsPerPage = 8;
+    const rowsPerPage = 9; // 9*25 + 8*4 + márgenes => cabe
 
     labelsToPrint.forEach((label, index) => {
-      const indexInPage = index % (cols * rowsPerPage);
+      const perPage = cols * rowsPerPage;
+      const indexInPage = index % perPage;
       const col = indexInPage % cols;
       const row = Math.floor(indexInPage / cols);
 
       if (indexInPage === 0 && index > 0) doc.addPage();
 
-      const x = marginX + col * (labelWidth + marginX);
-      const y = marginY + row * (labelHeight + marginY);
+      const x = marginX + col * (labelWidth + gapX);
+      const y = marginY + row * (labelHeight + gapY);
 
       const canvas = document.createElement("canvas");
+
+      const code = String(label.codigo_barras || "").trim();
       try {
-        JsBarcode(canvas, label.codigo_barras, {
-          format: "EAN13",
+        JsBarcode(canvas, code, {
+          format: isEan13(code) ? "EAN13" : "CODE128",
           displayValue: false,
           margin: 0,
         });
       } catch {
-        JsBarcode(canvas, label.codigo_barras, {
+        JsBarcode(canvas, code, {
           format: "CODE128",
           displayValue: false,
           margin: 0,
@@ -877,27 +953,115 @@ export default function ImportComprasPage() {
 
       const imgData = canvas.toDataURL("image/png");
 
-      doc.roundedRect(x - 1, y - 1, labelWidth + 2, labelHeight + 2, 1, 1, "S");
+      // borde
+      doc.roundedRect(x, y, labelWidth, labelHeight, 1.2, 1.2, "S");
 
       doc.setFontSize(7);
-      doc.text((label.nombre || "").substring(0, 32), x, y + 3);
-      doc.setFontSize(6);
-      doc.text(`SKU: ${label.sku}`, x, y + 7);
+      doc.text((label.nombre || "").substring(0, 30), x + 2, y + 4);
 
-      const barcodeHeight = 16;
+      doc.setFontSize(6);
+      doc.text(`SKU: ${label.sku}`, x + 2, y + 7);
+
+      // barcode
+      const barcodeHeight = 12;
       const barcodeWidth = labelWidth - 4;
       const barcodeX = x + 2;
-      const barcodeY = y + 9;
+      const barcodeY = y + 8.5;
 
       doc.addImage(imgData, "PNG", barcodeX, barcodeY, barcodeWidth, barcodeHeight);
 
-      doc.setFontSize(7);
-      doc.text(label.codigo_barras, x + labelWidth / 2, barcodeY + barcodeHeight + 4, {
+      doc.setFontSize(6.5);
+      doc.text(code, x + labelWidth / 2, barcodeY + barcodeHeight + 3.5, {
         align: "center",
       });
     });
 
     doc.save("etiquetas_compra_masiva.pdf");
+  };
+
+  // ==========================
+  // 6) Imprimir etiqueta individual (sin rutas extra)
+  // ==========================
+  const escapeHtml = (s: any) =>
+    String(s ?? "")
+      .replaceAll("&", "&amp;")
+      .replaceAll("<", "&lt;")
+      .replaceAll(">", "&gt;")
+      .replaceAll('"', "&quot;")
+      .replaceAll("'", "&#039;");
+
+  const printSingleLabel = (lbl: LabelToPrint) => {
+    if (typeof window === "undefined") return;
+
+    const w = window.open("", "_blank");
+    if (!w) {
+      setServerError("El navegador bloqueó la impresión (pop-up). Activa pop-ups y reintenta.");
+      return;
+    }
+
+    const name = escapeHtml(lbl.nombre);
+    const sku = escapeHtml(lbl.sku);
+    const code = escapeHtml(lbl.codigo_barras);
+
+    w.document.open();
+    w.document.write(`<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Etiqueta ${sku}</title>
+  <style>
+    @page { margin: 6mm; }
+    body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
+    .label {
+      width: 50mm;
+      height: 25mm;
+      border: 1px solid #111;
+      padding: 3mm;
+      border-radius: 6px;
+      box-sizing: border-box;
+      display: flex;
+      flex-direction: column;
+      justify-content: space-between;
+      overflow: hidden;
+    }
+    .name { font-size: 9px; font-weight: 700; line-height: 1.1; max-height: 18px; overflow: hidden; }
+    .meta { display: flex; justify-content: space-between; gap: 6px; font-size: 8px; }
+    .code { font-size: 8px; text-align: center; letter-spacing: 0.6px; }
+    .barcode { width: 100%; height: 10mm; }
+    .hint { font-size: 10px; margin: 0 0 4mm; }
+    @media print { .hint { display: none; } }
+  </style>
+  <script src="https://cdn.jsdelivr.net/npm/jsbarcode@3.11.6/dist/JsBarcode.all.min.js"></script>
+</head>
+<body>
+  <div class="hint">Etiqueta 50×25mm. Si algo se corta, ajusta escala/márgenes en impresión.</div>
+
+  <div class="label">
+    <div class="name">${name}</div>
+    <svg class="barcode" id="bc"></svg>
+    <div class="meta">
+      <span class="sku">SKU: ${sku}</span>
+    </div>
+    <div class="code">${code}</div>
+  </div>
+
+  <script>
+    (function() {
+      const code = ${JSON.stringify(String(lbl.codigo_barras || ""))};
+      try {
+        JsBarcode("#bc", code, { format: "EAN13", displayValue: false, height: 36, margin: 0 });
+      } catch (e) {
+        try {
+          JsBarcode("#bc", code, { format: "CODE128", displayValue: false, height: 36, margin: 0 });
+        } catch (e2) {}
+      }
+      setTimeout(() => window.print(), 250);
+    })();
+  </script>
+</body>
+</html>`);
+    w.document.close();
   };
 
   if (!user) {
@@ -927,17 +1091,18 @@ export default function ImportComprasPage() {
                 <h2 className="text-sm font-semibold">1. Preparar archivo de compra</h2>
                 <p className="text-[11px] text-[#c9b296] max-w-xl">
                   Si el archivo trae código de barras real, se respeta. Si viene vacío, “-”, “—”, “NA” o una letra,
-                  se genera automáticamente un EAN-13 válido y lo verás desde la vista previa.
+                  se genera automáticamente un <b>EAN-13 válido</b> y lo verás desde la vista previa.
                 </p>
 
                 <ul className="text-[11px] text-[#c9b296] list-disc list-inside space-y-1">
                   <li>
-                    Columnas mínimas:{" "}
-                    <span className="font-mono">nombre_producto, costo_compra, cantidad</span>
+                    Columnas mínimas: <span className="font-mono">nombre_producto, costo_compra, cantidad</span>
                   </li>
                   <li>
                     Opcionales recomendadas:{" "}
-                    <span className="font-mono">codigo_barras, sku, categoria, costo_impuestos, costo_desaduanaje</span>
+                    <span className="font-mono">
+                      codigo_barras, sku, categoria, costo_impuestos, costo_desaduanaje
+                    </span>
                   </li>
                   <li>Formato: CSV o Excel (.xlsx / .xls).</li>
                 </ul>
@@ -949,6 +1114,19 @@ export default function ImportComprasPage() {
                 >
                   Descargar plantilla CSV
                 </button>
+
+                {items.length > 0 && (
+                  <p className="text-[11px] text-[#c9b296]">
+                    Detectadas <span className="text-[#f1e4d4]">{items.length}</span> filas válidas.
+                    {autoLabelsCount > 0 && (
+                      <>
+                        {" "}
+                        Códigos generados automáticamente:{" "}
+                        <span className="text-[#e3c578]">{autoLabelsCount}</span>.
+                      </>
+                    )}
+                  </p>
+                )}
               </div>
 
               <div className="w-full md:w-80 space-y-2">
@@ -969,8 +1147,7 @@ export default function ImportComprasPage() {
                   />
                   {fileName && (
                     <p className="text-[11px] text-[#c9b296]">
-                      Archivo seleccionado:{" "}
-                      <span className="font-mono text-[#f1e4d4]">{fileName}</span>
+                      Archivo seleccionado: <span className="font-mono text-[#f1e4d4]">{fileName}</span>
                     </p>
                   )}
                 </div>
@@ -978,12 +1155,6 @@ export default function ImportComprasPage() {
                 {parseError && (
                   <p className="text-[11px] text-red-300 bg-red-900/40 border border-red-700/60 rounded-lg px-3 py-2 mt-1">
                     {parseError}
-                  </p>
-                )}
-
-                {items.length > 0 && !parseError && (
-                  <p className="text-[11px] text-[#e3c578] mt-1">
-                    {items.length} filas válidas listas para importar.
                   </p>
                 )}
               </div>
@@ -1017,7 +1188,7 @@ export default function ImportComprasPage() {
             <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 space-y-3">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-sm font-semibold">Vista previa del archivo</h2>
-                <span className="text-[11px] text-[#c9b296]">Solo se muestra un máximo de 50 filas</span>
+                <span className="text-[11px] text-[#c9b296]">Máximo 50 filas</span>
               </div>
 
               <div className="overflow-x-auto max-h-72">
@@ -1039,13 +1210,21 @@ export default function ImportComprasPage() {
                     {items.slice(0, 50).map((it, idx) => (
                       <tr key={idx} className="border-b border-[#3a0d12]/70 hover:bg-[#3a0d12]/60">
                         <td className="py-1.5 px-2 text-[#b39878]">{idx + 1}</td>
-                        <td className="py-1.5 px-2 font-mono text-[#f1e4d4]">{it.codigo_barras || "—"}</td>
+                        <td className="py-1.5 px-2 font-mono text-[#f1e4d4]">
+                          {it.codigo_barras || "—"}
+                        </td>
                         <td className="py-1.5 px-2 font-mono text-[#f1e4d4]">{it.sku || "—"}</td>
                         <td className="py-1.5 px-2 text-[#f8f1e6]">{it.nombre_producto}</td>
                         <td className="py-1.5 px-2 text-[#e3d2bd]">{it.categoria || "—"}</td>
-                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">{it.costo_compra.toFixed(2)}</td>
-                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">{it.costo_impuestos.toFixed(2)}</td>
-                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">{it.costo_desaduanaje.toFixed(2)}</td>
+                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">
+                          {it.costo_compra.toFixed(2)}
+                        </td>
+                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">
+                          {it.costo_impuestos.toFixed(2)}
+                        </td>
+                        <td className="py-1.5 px-2 text-right text-[#f1e4d4]">
+                          {it.costo_desaduanaje.toFixed(2)}
+                        </td>
                         <td className="py-1.5 px-2 text-right text-[#f1e4d4]">{it.cantidad}</td>
                       </tr>
                     ))}
@@ -1060,7 +1239,7 @@ export default function ImportComprasPage() {
             <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 space-y-3">
               <div className="flex items-center justify-between mb-1">
                 <h2 className="text-sm font-semibold">Resultado de la importación</h2>
-                <span className="text-[11px] text-[#c9b296]">Nuevos productos vs actualizados y precios sugeridos</span>
+                <span className="text-[11px] text-[#c9b296]">Nuevos vs actualizados</span>
               </div>
 
               <div className="overflow-x-auto max-h-80">
@@ -1073,7 +1252,7 @@ export default function ImportComprasPage() {
                       <th className="py-2 px-2 text-center">Tipo</th>
                       <th className="py-2 px-2 text-right">Cantidad</th>
                       <th className="py-2 px-2 text-right">Costo total unit.</th>
-                      <th className="py-2 px-2 text-right">Precio venta sugerido</th>
+                      <th className="py-2 px-2 text-right">Precio sugerido</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -1104,14 +1283,15 @@ export default function ImportComprasPage() {
             </section>
           )}
 
-          {/* Etiquetas */}
+          {/* Etiquetas (solo auto-generadas) */}
           {labelsToPrint.length > 0 && (
             <section className="bg-[#3a0d12]/80 border border-[#b98c3f]/50 rounded-2xl p-4 space-y-3">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
                 <div>
                   <h2 className="text-sm font-semibold">Etiquetas generadas automáticamente</h2>
                   <p className="text-[11px] text-[#c9b296] max-w-xl">
-                    Estos productos no traían código de barras válido; se generó uno automáticamente y ya puedes imprimir etiquetas.
+                    Estos productos no traían código de barras válido; se generó uno automáticamente y ya puedes imprimir.
+                    (El inventario ahora tiene “ID oficial” y no solo “-” con actitud 😄)
                   </p>
                 </div>
 
@@ -1121,7 +1301,7 @@ export default function ImportComprasPage() {
                     onClick={handleDownloadLabelsPdf}
                     className="px-4 py-2 rounded-full bg-[#d6b25f] hover:bg-[#e3c578] text-[11px] font-semibold text-[#2b0a0b]"
                   >
-                    Descargar PDF con todas las etiquetas
+                    Descargar PDF (todas)
                   </button>
                 </div>
               </div>
@@ -1137,11 +1317,10 @@ export default function ImportComprasPage() {
                       <p className="text-xs font-semibold text-[#f8f1e6] line-clamp-2">{lbl.nombre}</p>
                       <p className="text-[11px] font-mono text-[#f1e4d4]">{lbl.codigo_barras}</p>
                     </div>
+
                     <button
                       type="button"
-                      onClick={() =>
-                        window.open(`/dashboard/productos/etiqueta/${encodeURIComponent(lbl.codigo_barras)}`, "_blank")
-                      }
+                      onClick={() => printSingleLabel(lbl)}
                       className="mt-2 self-start px-3 py-1 rounded-full bg-[#d6b25f] hover:bg-[#e3c578] text-[11px] font-semibold text-[#2b0a0b]"
                     >
                       Imprimir etiqueta individual
@@ -1156,3 +1335,4 @@ export default function ImportComprasPage() {
     </div>
   );
 }
+

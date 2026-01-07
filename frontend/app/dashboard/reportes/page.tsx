@@ -4,8 +4,26 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ En Render (1 servicio): usar rutas relativas "/api/..."
+// ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
+
+function buildApiUrl(path: string) {
+  // Si viene definido (ej: en local con .env.local), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // En producción (Render) -> mismo dominio
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -102,7 +120,7 @@ export default function ReportesPage() {
         setErrorCierre(null);
 
         // Backend: GET /api/cash-register/today
-        const res = await fetch(`${API_URL}/api/cash-register/today`, {
+        const res = await fetch(buildApiUrl("/api/cash-register/today"), {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -121,9 +139,7 @@ export default function ReportesPage() {
         const json = await res.json();
 
         if (json.ok === false) {
-          throw new Error(
-            json.message || "No se pudo cargar el cierre de caja."
-          );
+          throw new Error(json.message || "No se pudo cargar el cierre de caja.");
         }
 
         // backend: { ok, data: { estado, cierreActual } }
@@ -152,7 +168,7 @@ export default function ReportesPage() {
         setErrorHistory(null);
 
         // Backend esperado: GET /api/cash-register/history
-        const res = await fetch(`${API_URL}/api/cash-register/history`, {
+        const res = await fetch(buildApiUrl("/api/cash-register/history"), {
           headers: {
             Authorization: `Bearer ${token}`,
           },
@@ -182,9 +198,7 @@ export default function ReportesPage() {
         setHistory(data);
       } catch (err: any) {
         console.error(err);
-        setErrorHistory(
-          err.message || "Error cargando historial de cierres."
-        );
+        setErrorHistory(err.message || "Error cargando historial de cierres.");
       } finally {
         setLoadingHistory(false);
       }
@@ -196,11 +210,13 @@ export default function ReportesPage() {
   // ========= DESCARGAR EXCEL DEL CIERRE (SOLO LECTURA) =========
   const descargarExcelCierre = () => {
     if (!token || !cierre) return;
-    // Suponiendo backend: GET /api/cash-register/:id/excel
-    window.open(
-      `${API_URL}/api/cash-register/${cierre.id}/excel?token=${token}`,
-      "_blank"
+
+    // Nota: window.open no permite enviar Authorization header fácilmente,
+    // por eso se usa token en querystring (si tu backend lo soporta).
+    const url = buildApiUrl(
+      `/api/cash-register/${cierre.id}/excel?token=${encodeURIComponent(token)}`
     );
+    window.open(url, "_blank");
   };
 
   const estado = estadoCierre();
@@ -244,9 +260,7 @@ export default function ReportesPage() {
           <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 md:p-5 space-y-4">
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
               <div>
-                <h2 className="text-sm font-semibold">
-                  Cierre de caja del día
-                </h2>
+                <h2 className="text-sm font-semibold">Cierre de caja del día</h2>
                 <p className="text-xs text-[#c9b296]">
                   Resumen del estado de la caja del día actual para control
                   interno.
@@ -296,31 +310,21 @@ export default function ReportesPage() {
             {cierre && (
               <div className="grid grid-cols-1 md:grid-cols-4 gap-3 text-xs mt-2">
                 <div className="bg-[#2b0a0b]/60 border border-[#5a1b22] rounded-xl px-3 py-2">
-                  <div className="text-[#c9b296] text-[11px]">
-                    Apertura
-                  </div>
+                  <div className="text-[#c9b296] text-[11px]">Apertura</div>
                   <div className="text-[#f8f1e6]">
-                    {new Date(cierre.fecha_inicio).toLocaleString(
-                      "es-GT"
-                    )}
+                    {new Date(cierre.fecha_inicio).toLocaleString("es-GT")}
                   </div>
                 </div>
                 <div className="bg-[#2b0a0b]/60 border border-[#5a1b22] rounded-xl px-3 py-2">
-                  <div className="text-[#c9b296] text-[11px]">
-                    Cierre
-                  </div>
+                  <div className="text-[#c9b296] text-[11px]">Cierre</div>
                   <div className="text-[#f8f1e6]">
                     {cierre.fecha_fin
-                      ? new Date(
-                          cierre.fecha_fin
-                        ).toLocaleString("es-GT")
+                      ? new Date(cierre.fecha_fin).toLocaleString("es-GT")
                       : "-"}
                   </div>
                 </div>
                 <div className="bg-[#2b0a0b]/60 border border-[#5a1b22] rounded-xl px-3 py-2">
-                  <div className="text-[#c9b296] text-[11px]">
-                    Total general
-                  </div>
+                  <div className="text-[#c9b296] text-[11px]">Total general</div>
                   <div className="text-[#d6b25f] font-semibold">
                     {formatQ(cierre.total_general)}
                   </div>
@@ -415,9 +419,7 @@ export default function ReportesPage() {
                           className="hover:bg-[#3a0d12]/70 transition-colors"
                         >
                           <td className="px-3 py-2 border-b border-[#5a1b22]">
-                            {new Date(c.fecha_inicio).toLocaleString(
-                              "es-GT"
-                            )}
+                            {new Date(c.fecha_inicio).toLocaleString("es-GT")}
                           </td>
                           <td className="px-3 py-2 border-b border-[#5a1b22]">
                             {c.usuarios?.nombre || "—"}
@@ -460,18 +462,14 @@ export default function ReportesPage() {
 
           {/* Placeholder para futuros reportes */}
           <section className="bg-[#3a0d12]/60 border border-[#5a1b22] rounded-2xl p-4 md:p-5">
-            <h2 className="text-sm font-semibold mb-2">
-              Próximos reportes
-            </h2>
+            <h2 className="text-sm font-semibold mb-2">Próximos reportes</h2>
             <p className="text-xs text-[#c9b296]">
               Aquí más adelante agregaremos:
             </p>
             <ul className="text-xs text-[#e3d2bd] list-disc ml-5 mt-1 space-y-1">
               <li>Ventas del día por cajero.</li>
               <li>Ventas del mes y del año.</li>
-              <li>
-                Reporte interno de inventario (costo, desaduanaje, etc.).
-              </li>
+              <li>Reporte interno de inventario (costo, desaduanaje, etc.).</li>
             </ul>
           </section>
         </main>

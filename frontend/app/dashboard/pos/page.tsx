@@ -4,7 +4,28 @@ import React, { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+/**
+ * ✅ En Render (misma app / mismo dominio): usar rutas relativas "/api/..."
+ * ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta (ej. http://localhost:4000)
+ */
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final
+
+function buildApiUrl(path: string) {
+  // Si existe NEXT_PUBLIC_API_URL (local o prod separado), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // Si estamos en producción (no localhost), usa el mismo dominio del frontend
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -91,7 +112,7 @@ export default function PosCashPage() {
       params.set("to", to);
 
       const res = await fetch(
-        `${API_URL}/api/cash/summary?${params.toString()}`,
+        buildApiUrl(`/api/cash/summary?${params.toString()}`),
         {
           headers: {
             Authorization: `Bearer ${jwt}`,
@@ -99,13 +120,14 @@ export default function PosCashPage() {
         }
       );
 
+      // ✅ leer body UNA sola vez
+      const json = await res.json().catch(() => null);
+
       if (!res.ok) {
-        const body = await res.json().catch(() => null);
-        throw new Error(body?.message || "No se pudo obtener el resumen.");
+        throw new Error(json?.message || "No se pudo obtener el resumen.");
       }
 
-      const json = await res.json();
-      const data = json.data as CashSummary;
+      const data = (json?.data || null) as CashSummary | null;
       setSummary(data);
     } catch (err: any) {
       console.error(err);
@@ -151,7 +173,7 @@ export default function PosCashPage() {
 
       const { from, to } = getDayRangeISO(selectedDate);
 
-      const res = await fetch(`${API_URL}/api/cash/close`, {
+      const res = await fetch(buildApiUrl("/api/cash/close"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -202,10 +224,9 @@ export default function PosCashPage() {
   const tarjeta = summary?.totales.tarjeta || 0;
   const general = summary?.totales.general || 0;
 
-  // ✅ Rol normalizado (arreglo real del bug)
+  // ✅ Rol normalizado
   const rolNorm = String(user.rol ?? "").trim().toUpperCase();
   const isCajero = rolNorm === "CAJERO";
-  // const isAdmin = rolNorm === "ADMIN";
 
   return (
     <div className="min-h-screen bg-[#2b0a0b] text-[#f8f1e6] flex">

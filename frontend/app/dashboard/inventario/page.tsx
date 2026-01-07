@@ -4,7 +4,28 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+/**
+ * ✅ En Render (misma app / mismo dominio): usar rutas relativas "/api/..."
+ * ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta (ej. http://localhost:4000)
+ */
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final
+
+function buildApiUrl(path: string) {
+  // Si existe NEXT_PUBLIC_API_URL (local o prod separado), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // Si estamos en producción (no localhost), usa el mismo dominio del frontend
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -126,14 +147,14 @@ export default function InventarioPage() {
     }
   }, [router]);
 
-  // ✅ Cargar inventario público desde el endpoint correcto (no lo tocamos)
+  // ✅ Cargar inventario público desde el endpoint correcto
   const cargarInventarioPublico = async () => {
     if (!token) return;
     try {
       setPublicLoading(true);
       setPublicError(null);
 
-      const res = await fetch(`${API_URL}/api/inventory/stock?vista=publico`, {
+      const res = await fetch(buildApiUrl(`/api/inventory/stock?vista=publico`), {
         headers: { Authorization: `Bearer ${token}` },
       });
 
@@ -208,7 +229,10 @@ export default function InventarioPage() {
   const publicTotalItems = productosPublicosFiltrados.length;
 
   const publicTotalPages = useMemo(() => {
-    return Math.max(1, Math.ceil(publicTotalItems / Math.max(1, publicPageSize)));
+    return Math.max(
+      1,
+      Math.ceil(publicTotalItems / Math.max(1, publicPageSize))
+    );
   }, [publicTotalItems, publicPageSize]);
 
   useEffect(() => {
@@ -218,7 +242,10 @@ export default function InventarioPage() {
   }, [publicPage, publicTotalPages, viewMode]);
 
   const publicStartIndex = (publicPage - 1) * publicPageSize;
-  const publicEndIndex = Math.min(publicStartIndex + publicPageSize, publicTotalItems);
+  const publicEndIndex = Math.min(
+    publicStartIndex + publicPageSize,
+    publicTotalItems
+  );
 
   const productosPublicosPaginados = useMemo(() => {
     return productosPublicosFiltrados.slice(publicStartIndex, publicEndIndex);
@@ -239,9 +266,6 @@ export default function InventarioPage() {
   const isCodigoAutomatico = (code: string | null | undefined) => {
     const c = String(code ?? "").trim();
     if (!c) return false;
-
-    // ✅ Automático = SOLO dígitos (ej: 2019777480067)
-    // ❌ Si trae letras (ej: X001128103) NO entra
     return /^\d+$/.test(c);
   };
 
@@ -255,7 +279,7 @@ export default function InventarioPage() {
     setEditingCatValue("");
   };
 
-  // ✅ Guardar categoría usando tu endpoint existente (NO tocamos backend)
+  // ✅ Guardar categoría usando tu endpoint existente
   const saveCategory = async (p: ProductoPublico) => {
     if (!token) return;
 
@@ -278,7 +302,7 @@ export default function InventarioPage() {
         ],
       };
 
-      const res = await fetch(`${API_URL}/api/sales/bulk-products`, {
+      const res = await fetch(buildApiUrl(`/api/sales/bulk-products`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -291,7 +315,9 @@ export default function InventarioPage() {
       if (!res.ok) throw new Error(data?.message || "Error al guardar categoría");
 
       setPublicProductos((prev) =>
-        prev.map((x) => (x.id === p.id ? { ...x, categoria: nueva || null } : x))
+        prev.map((x) =>
+          x.id === p.id ? { ...x, categoria: nueva || null } : x
+        )
       );
 
       cancelEditCategory();
@@ -304,15 +330,15 @@ export default function InventarioPage() {
   };
 
   /**
-   * ✅ Tamaño recomendado de etiqueta real:
-   *  - 50mm x 25mm (2" x 1") ✅ estándar más común
-   *  - CODE128
-   * ✅ IMPORTANTE: imprime SOLO códigos AUTOMÁTICOS (SOLO dígitos)
+   * ✅ Etiqueta 50mm x 25mm, CODE128
+   * ✅ Imprime SOLO códigos AUTOMÁTICOS (solo dígitos)
    */
-  const printBarcodes = (items: ProductoPublico[], title = "Códigos de barras") => {
+  const printBarcodes = (
+    items: ProductoPublico[],
+    title = "Códigos de barras"
+  ) => {
     if (typeof window === "undefined") return;
 
-    // ✅ SOLO automáticos (se descartan los del proveedor)
     const rows = (items || []).filter((p) => isCodigoAutomatico(p.codigo_barras));
 
     if (rows.length === 0) {
@@ -361,7 +387,6 @@ export default function InventarioPage() {
           <meta name="viewport" content="width=device-width,initial-scale=1" />
           <title>${escapeHtml(title)}</title>
           <style>
-            /* ✅ Etiqueta real recomendada: 50mm x 25mm */
             @page { margin: 6mm; }
             body { font-family: Arial, sans-serif; margin: 0; padding: 0; }
             .wrap { padding: 6mm; }
@@ -403,7 +428,9 @@ export default function InventarioPage() {
 
           <script>
             (function() {
-              const rows = ${JSON.stringify(rows.map((p) => String(p.codigo_barras || "")))};
+              const rows = ${JSON.stringify(
+                rows.map((p) => String(p.codigo_barras || ""))
+              )};
               rows.forEach((code, i) => {
                 try {
                   JsBarcode("#bc-" + i, code, {
@@ -429,7 +456,7 @@ export default function InventarioPage() {
     router.push("/login");
   };
 
-  // ✅ ahora el return condicional está DESPUÉS de todos los hooks
+  // ✅ Return condicional DESPUÉS de todos los hooks
   if (!user) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-[#2b0a0b] text-[#f1e4d4]">
@@ -447,7 +474,9 @@ export default function InventarioPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <h1 className="text-xl md:text-2xl font-semibold">Inventario</h1>
-              <p className="text-xs md:text-sm text-[#c9b296] capitalize">{today}</p>
+              <p className="text-xs md:text-sm text-[#c9b296] capitalize">
+                {today}
+              </p>
             </div>
 
             <div className="flex items-center gap-3 w-full md:w-auto">
@@ -470,7 +499,8 @@ export default function InventarioPage() {
                   Tipo de inventario
                 </p>
                 <p className="text-sm text-[#e3d2bd]">
-                  Elige qué vista deseas abrir: inventario interno (costos + existencias) o inventario público (lista de precios).
+                  Elige qué vista deseas abrir: inventario interno (costos +
+                  existencias) o inventario público (lista de precios).
                 </p>
               </div>
 
@@ -480,8 +510,12 @@ export default function InventarioPage() {
                   onClick={() => setViewMode("interno")}
                   className="rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-4 text-left"
                 >
-                  <p className="text-xs font-semibold text-[#e3c578] mb-1">Inventario interno</p>
-                  <p className="text-[11px] text-[#f1e4d4]">Costos reales + existencias. (Sin precio venta, sin márgenes.)</p>
+                  <p className="text-xs font-semibold text-[#e3c578] mb-1">
+                    Inventario interno
+                  </p>
+                  <p className="text-[11px] text-[#f1e4d4]">
+                    Costos reales + existencias. (Sin precio venta, sin márgenes.)
+                  </p>
                 </button>
 
                 <button
@@ -489,8 +523,12 @@ export default function InventarioPage() {
                   onClick={() => setViewMode("publico")}
                   className="rounded-2xl border border-[#c39a4c]/60 bg-[#c39a4c]/10 hover:bg-[#c39a4c]/20 transition-colors px-4 py-4 text-left"
                 >
-                  <p className="text-xs font-semibold text-[#d9ba72] mb-1">Inventario público</p>
-                  <p className="text-[11px] text-[#f1e4d4]">Lista de precios: categoría, precio público/mayorista y disponibilidad.</p>
+                  <p className="text-xs font-semibold text-[#d9ba72] mb-1">
+                    Inventario público
+                  </p>
+                  <p className="text-[11px] text-[#f1e4d4]">
+                    Lista de precios: categoría, precio público/mayorista y disponibilidad.
+                  </p>
                 </button>
               </div>
             </section>
@@ -527,19 +565,28 @@ export default function InventarioPage() {
                 <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4">
                   <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
                     <div>
-                      <h2 className="text-sm font-semibold">Inventario público (lista de precios)</h2>
+                      <h2 className="text-sm font-semibold">
+                        Inventario público (lista de precios)
+                      </h2>
                       <p className="text-[11px] text-[#c9b296]">
                         Nota: aquí solo aparecen productos ACTIVO=true y NO archivados.
                       </p>
                       {!!publicError && (
-                        <p className="text-[11px] text-red-300 mt-2">Error: {publicError}</p>
+                        <p className="text-[11px] text-red-300 mt-2">
+                          Error: {publicError}
+                        </p>
                       )}
                     </div>
 
                     <div className="flex flex-wrap items-center gap-2">
                       <button
                         type="button"
-                        onClick={() => printBarcodes(productosPublicosFiltrados, "Códigos automáticos (filtrado)")}
+                        onClick={() =>
+                          printBarcodes(
+                            productosPublicosFiltrados,
+                            "Códigos automáticos (filtrado)"
+                          )
+                        }
                         className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1.5 text-[11px] text-[#f1e4d4] disabled:opacity-40"
                         disabled={publicLoading || productosPublicosFiltrados.length === 0}
                       >
@@ -560,9 +607,10 @@ export default function InventarioPage() {
                   {!publicLoading && publicTotalItems > 0 && (
                     <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3 mb-3">
                       <p className="text-[11px] text-[#c9b296]">
-                        Mostrando <span className="text-[#f1e4d4]">{publicStartIndex + 1}</span>–
-                        <span className="text-[#f1e4d4]">{publicEndIndex}</span> de{" "}
-                        <span className="text-[#f1e4d4]">{publicTotalItems}</span>
+                        Mostrando{" "}
+                        <span className="text-[#f1e4d4]">{publicStartIndex + 1}</span>–
+                        <span className="text-[#f1e4d4]">{publicEndIndex}</span>{" "}
+                        de <span className="text-[#f1e4d4]">{publicTotalItems}</span>
                       </p>
 
                       <div className="flex items-center gap-2">
@@ -596,7 +644,9 @@ export default function InventarioPage() {
 
                         <button
                           type="button"
-                          onClick={() => setPublicPage((p) => Math.min(publicTotalPages, p + 1))}
+                          onClick={() =>
+                            setPublicPage((p) => Math.min(publicTotalPages, p + 1))
+                          }
                           disabled={publicPage >= publicTotalPages}
                           className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80 disabled:opacity-40 disabled:hover:bg-transparent"
                         >
@@ -605,7 +655,12 @@ export default function InventarioPage() {
 
                         <button
                           type="button"
-                          onClick={() => printBarcodes(productosPublicosPaginados, `Códigos automáticos (página ${publicPage})`)}
+                          onClick={() =>
+                            printBarcodes(
+                              productosPublicosPaginados,
+                              `Códigos automáticos (página ${publicPage})`
+                            )
+                          }
                           className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1 text-[11px] text-[#f1e4d4] disabled:opacity-40"
                           disabled={publicLoading || productosPublicosPaginados.length === 0}
                         >
@@ -738,7 +793,9 @@ export default function InventarioPage() {
                                 <td className="py-2 px-2 text-center">
                                   <button
                                     type="button"
-                                    onClick={() => printBarcodes([p], `Código automático: ${p.nombre}`)}
+                                    onClick={() =>
+                                      printBarcodes([p], `Código automático: ${p.nombre}`)
+                                    }
                                     disabled={!esAuto}
                                     className="text-[11px] rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 px-2 py-0.5 hover:bg-[#d6b25f]/20 disabled:opacity-40"
                                   >
@@ -763,8 +820,6 @@ export default function InventarioPage() {
 
 /** =========================================================
  * ✅ Helper: descargar plantilla Excel para precios (ventas)
- * - NO toca backend
- * - Usa los datos reales del inventario interno (sku + barcode + stock)
  * ======================================================= */
 async function descargarPlantillaPrecios(
   items: Array<{
@@ -781,7 +836,6 @@ async function descargarPlantillaPrecios(
     sku: p.sku ?? "",
     nombre: p.nombre ?? "",
     stock: Number(p.stock_total ?? 0),
-
     precio_cliente_final: "",
     precio_mayorista: "",
   }));
@@ -800,7 +854,9 @@ async function descargarPlantillaPrecios(
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, "Plantilla_Precios");
 
-  const fileName = `plantilla_precios_ventas_${new Date().toISOString().slice(0, 10)}.xlsx`;
+  const fileName = `plantilla_precios_ventas_${new Date()
+    .toISOString()
+    .slice(0, 10)}.xlsx`;
 
   const arrayBuffer = XLSX.write(wb, { bookType: "xlsx", type: "array" });
   const blob = new Blob([arrayBuffer], {
@@ -818,9 +874,15 @@ async function descargarPlantillaPrecios(
 }
 
 /** =========================
- *  COMPONENTE: INVENTARIO INTERNO (igual al tuyo)
+ *  COMPONENTE: INVENTARIO INTERNO
  * ========================= */
-function InventoryInternalSection({ token, search }: { token: string; search: string }) {
+function InventoryInternalSection({
+  token,
+  search,
+}: {
+  token: string;
+  search: string;
+}) {
   const [rows, setRows] = useState<InventarioExistenciaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -835,7 +897,7 @@ function InventoryInternalSection({ token, search }: { token: string; search: st
         setError(null);
 
         const res = await fetch(
-          `${API_URL}/api/inventory/stock?includeSinMovimientos=true`,
+          buildApiUrl(`/api/inventory/stock?includeSinMovimientos=true`),
           { headers: { Authorization: `Bearer ${token}` } }
         );
 
@@ -951,15 +1013,21 @@ function InventoryInternalSection({ token, search }: { token: string; search: st
     <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 space-y-4">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">
         <div>
-          <h2 className="text-sm font-semibold">Inventario interno (costos + existencias)</h2>
+          <h2 className="text-sm font-semibold">
+            Inventario interno (costos + existencias)
+          </h2>
           <p className="text-[11px] text-[#c9b296]">
-            Solo lo relevante: SKU, nombre, costos (incluye desaduanaje), stock y el total del inventario (costo).
+            SKU, nombre, costos (incluye desaduanaje), stock y el total del inventario (costo).
           </p>
         </div>
 
         <div className="flex flex-col items-end gap-2">
           <div className="grid grid-cols-2 gap-3 min-w-[260px]">
-            <MiniCard titulo="Total inventario (costo)" valor={totalCostoInventario} tipo="currency" />
+            <MiniCard
+              titulo="Total inventario (costo)"
+              valor={totalCostoInventario}
+              tipo="currency"
+            />
             <MiniCard titulo="Piezas totales" valor={totalPiezas} tipo="number" />
           </div>
 
@@ -973,8 +1041,8 @@ function InventoryInternalSection({ token, search }: { token: string; search: st
           </button>
 
           <p className="text-[10px] text-[#c9b296] text-right max-w-[320px]">
-            Esta plantilla sale con <b>SKU + código de barras reales</b> y el <b>stock</b>. Tú solo llenas{" "}
-            <b>precio_cliente_final</b> y opcional <b>precio_mayorista</b>.
+            La plantilla sale con <b>SKU + código de barras reales</b> y <b>stock</b>.
+            Tú solo llenas <b>precio_cliente_final</b> y opcional <b>precio_mayorista</b>.
           </p>
         </div>
       </div>
@@ -1057,16 +1125,33 @@ function InventoryInternalSection({ token, search }: { token: string; search: st
               )}
 
               {itemsPaginados.map((p) => (
-                <tr key={p.id} className="border-b border-[#3a0d12]/70 hover:bg-[#3a0d12]/70">
+                <tr
+                  key={p.id}
+                  className="border-b border-[#3a0d12]/70 hover:bg-[#3a0d12]/70"
+                >
                   <td className="py-2 px-2 text-[#f1e4d4]">{p.sku}</td>
                   <td className="py-2 px-2 text-[#f8f1e6]">{p.nombre}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.costo_compra.toFixed(2)}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.costo_envio.toFixed(2)}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.costo_impuestos.toFixed(2)}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.costo_desaduanaje.toFixed(2)}</td>
-                  <td className="py-2 px-2 text-right text-[#e3c578]">{p.costo_total_unitario.toFixed(2)}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.stock_total}</td>
-                  <td className="py-2 px-2 text-right text-[#f1e4d4]">{p.valor_inventario.toFixed(2)}</td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.costo_compra.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.costo_envio.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.costo_impuestos.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.costo_desaduanaje.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#e3c578]">
+                    {p.costo_total_unitario.toFixed(2)}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.stock_total}
+                  </td>
+                  <td className="py-2 px-2 text-right text-[#f1e4d4]">
+                    {p.valor_inventario.toFixed(2)}
+                  </td>
                 </tr>
               ))}
             </tbody>

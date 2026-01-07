@@ -1,10 +1,32 @@
+// frontend/app/dashboard/categorias/page.tsx
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+/**
+ * ✅ En producción (mismo dominio): usa rutas relativas "/api/..."
+ * ✅ En local: si defines NEXT_PUBLIC_API_URL / NEXT_PUBLIC_API_BASE_URL, lo respeta
+ */
+const API_BASE_RAW =
+  process.env.NEXT_PUBLIC_API_URL ??
+  process.env.NEXT_PUBLIC_API_BASE_URL ??
+  "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, "");
+
+function buildApiUrl(path: string) {
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -26,6 +48,8 @@ export default function CategoriasPage() {
 
   const [categorias, setCategorias] = useState<Categoria[]>([]);
   const [nombreNuevo, setNombreNuevo] = useState("");
+  const [busqueda, setBusqueda] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -38,7 +62,36 @@ export default function CategoriasPage() {
     day: "numeric",
   });
 
-  // Verificar sesión
+  // ==========================
+  // Helpers
+  // ==========================
+  const normalizeLite = (s: string) =>
+    s
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .trim()
+      .toLowerCase();
+
+  // ✅ FIX: tipado estable para fetch (evita el union {} | { Authorization: string })
+  const authHeaders = useMemo<Record<string, string>>(() => {
+    if (!token) return {} as Record<string, string>;
+    return { Authorization: `Bearer ${token}` };
+  }, [token]);
+
+  const handleLogout = () => {
+    localStorage.removeItem("joyeria_token");
+    localStorage.removeItem("joyeria_user");
+    router.push("/login");
+  };
+
+  const handleAuthFail = () => {
+    // Sesión vencida / token inválido
+    handleLogout();
+  };
+
+  // ==========================
+  // 1) Verificar sesión
+  // ==========================
   useEffect(() => {
     const t = localStorage.getItem("joyeria_token");
     const uStr = localStorage.getItem("joyeria_user");
@@ -57,18 +110,37 @@ export default function CategoriasPage() {
     }
   }, [router]);
 
-  const cargarCategorias = async () => {
+  // ==========================
+  // 2) Cargar categorías
+  // ==========================
+  const cargarCategorias = async (signal?: AbortSignal) => {
     if (!token) return;
+
     try {
+      setError(null);
       setLoading(true);
-      const res = await fetch(`${API_URL}/api/catalog/categories`, {
-        headers: { Authorization: `Bearer ${token}` },
+
+      const res = await fetch(buildApiUrl(`/api/catalog/categories`), {
+        headers: authHeaders,
+        signal,
       });
+
+      if (res.status === 401 || res.status === 403) {
+        handleAuthFail();
+        return;
+      }
+
       if (!res.ok) throw new Error("Error al cargar categorías");
+
       const data = await res.json();
-      const lista: Categoria[] = data.data || data;
+      const lista: Categoria[] = (data?.data ?? data) || [];
+
+      // Orden bonito (alfabético)
+      lista.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+
       setCategorias(lista);
-    } catch (err) {
+    } catch (err: any) {
+      if (err?.name === "AbortError") return;
       console.error(err);
       setError("No se pudieron cargar las categorías.");
     } finally {
@@ -78,42 +150,73 @@ export default function CategoriasPage() {
 
   useEffect(() => {
     if (!token) return;
-    cargarCategorias();
+    const ctrl = new AbortController();
+    cargarCategorias(ctrl.signal);
+    return () => ctrl.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
-  const handleCrear = async (e: React.FormEvent) => {
+  // ==========================
+  // 3) Crear categoría
+  // ==========================
+  const handleCrear = async (e: FormEvent) => {
     e.preventDefault();
     if (!token) return;
 
     setError(null);
     setSuccess(null);
 
-    if (!nombreNuevo.trim()) {
+    const nombre = nombreNuevo.trim();
+    if (!nombre) {
       setError("El nombre de la categoría es obligatorio.");
+      return;
+    }
+
+    // ✅ Bloqueo rápido de duplicados (case/acentos-insensitive)
+    const nombreNorm = normalizeLite(nombre);
+    const yaExisteLocal = categorias.some(
+      (c) => normalizeLite(c.nombre) === nombreNorm
+    );
+    if (yaExisteLocal) {
+      setError("Ya existe una categoría con ese nombre.");
       return;
     }
 
     try {
       setSaving(true);
-      const res = await fetch(`${API_URL}/api/catalog/categories`, {
+
+      const res = await fetch(buildApiUrl(`/api/catalog/categories`), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
+          ...authHeaders,
         },
-        body: JSON.stringify({ nombre: nombreNuevo.trim() }),
+        body: JSON.stringify({ nombre }),
       });
 
+      if (res.status === 401 || res.status === 403) {
+        handleAuthFail();
+        return;
+      }
+
       const data = await res.json();
+
       if (!res.ok || data.ok === false) {
         throw new Error(data.message || "Error creando categoría");
       }
 
       const categoriaCreada: Categoria = data.data || data;
 
-      setCategorias((prev) => [...prev, categoriaCreada]);
+      setCategorias((prev) => {
+        const next = [...prev, categoriaCreada];
+        next.sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
+        return next;
+      });
+
       setNombreNuevo("");
       setSuccess("Categoría creada correctamente.");
+      // Se autodesvanece (porque la felicidad también debe tener TTL 😄)
+      window.setTimeout(() => setSuccess(null), 2500);
     } catch (err: any) {
       console.error(err);
       setError(
@@ -126,36 +229,67 @@ export default function CategoriasPage() {
     }
   };
 
+  // ==========================
+  // 4) Eliminar categoría
+  // ==========================
   const handleEliminar = async (id: string) => {
     if (!token) return;
 
+    const cat = categorias.find((c) => c.id === id);
     const confirmar = window.confirm(
-      "¿Seguro que deseas eliminar esta categoría?"
+      `¿Seguro que deseas eliminar la categoría${
+        cat?.nombre ? `: "${cat.nombre}"` : ""
+      }?`
     );
     if (!confirmar) return;
 
+    setError(null);
+    setSuccess(null);
+
+    // Optimistic UI
+    const snapshot = categorias;
+    setCategorias((prev) => prev.filter((c) => c.id !== id));
+
     try {
-      const res = await fetch(`${API_URL}/api/catalog/categories/${id}`, {
+      const res = await fetch(buildApiUrl(`/api/catalog/categories/${id}`), {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${token}` },
+        headers: authHeaders,
       });
-      const data = await res.json();
+
+      if (res.status === 401 || res.status === 403) {
+        handleAuthFail();
+        return;
+      }
+
+      const data = await res.json().catch(() => ({}));
+
       if (!res.ok || data.ok === false) {
         throw new Error(data.message || "Error eliminando categoría");
       }
 
-      setCategorias((prev) => prev.filter((c) => c.id !== id));
-    } catch (err) {
+      setSuccess("Categoría eliminada correctamente.");
+      window.setTimeout(() => setSuccess(null), 2000);
+    } catch (err: any) {
       console.error(err);
-      alert("No se pudo eliminar la categoría.");
+      // rollback
+      setCategorias(snapshot);
+
+      // Mensaje más útil
+      setError(
+        err?.message ||
+          "No se pudo eliminar la categoría. Puede estar en uso por productos."
+      );
     }
   };
 
-  const handleLogout = () => {
-    localStorage.removeItem("joyeria_token");
-    localStorage.removeItem("joyeria_user");
-    router.push("/login");
-  };
+  // ==========================
+  // 5) Filtro
+  // ==========================
+  const categoriasFiltradas = useMemo(() => {
+    const q = normalizeLite(busqueda);
+    if (!q) return categorias;
+    return categorias.filter((c) => normalizeLite(c.nombre).includes(q));
+  }, [busqueda, categorias]);
 
   if (!user) {
     return (
@@ -178,6 +312,15 @@ export default function CategoriasPage() {
               {today}
             </p>
           </div>
+
+          <button
+            type="button"
+            onClick={() => cargarCategorias()}
+            className="hidden md:inline-flex items-center gap-2 px-3 py-1.5 rounded-full border border-[#d6b25f]/60 text-[11px] text-[#e3c578] hover:bg-[#d6b25f]/10"
+            title="Refrescar"
+          >
+            Refrescar ↻
+          </button>
         </header>
 
         <main className="flex-1 px-4 md:px-8 py-6 space-y-6">
@@ -216,24 +359,35 @@ export default function CategoriasPage() {
               </button>
             </form>
 
-            <p className="text-[11px] text-[#b39878]">
-              Total categorías: {categorias.length}
-            </p>
+            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2">
+              <p className="text-[11px] text-[#b39878]">
+                Total categorías: {categorias.length}
+              </p>
+
+              <input
+                type="text"
+                value={busqueda}
+                onChange={(e) => setBusqueda(e.target.value)}
+                className="w-full md:w-72 rounded-lg border border-[#6b232b] bg-[#2b0a0b]/80 px-3 py-2 text-[12px] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                placeholder="Buscar categoría…"
+              />
+            </div>
           </section>
 
           {/* Listado de categorías */}
           <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 space-y-3">
             <div className="flex items-center justify-between mb-1">
               <h2 className="text-sm font-semibold">Listado de categorías</h2>
+              <span className="text-[11px] text-[#c9b296]">
+                Mostrando: {categoriasFiltradas.length}
+              </span>
             </div>
 
             {loading ? (
-              <p className="text-sm text-[#c9b296]">
-                Cargando categorías...
-              </p>
-            ) : categorias.length === 0 ? (
+              <p className="text-sm text-[#c9b296]">Cargando categorías...</p>
+            ) : categoriasFiltradas.length === 0 ? (
               <p className="text-sm text-[#b39878]">
-                Aún no hay categorías registradas.
+                No hay categorías para mostrar.
               </p>
             ) : (
               <div className="overflow-x-auto">
@@ -245,7 +399,7 @@ export default function CategoriasPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {categorias.map((cat) => (
+                    {categoriasFiltradas.map((cat) => (
                       <tr
                         key={cat.id}
                         className="border-b border-[#3a0d12]/70 hover:bg-[#3a0d12]/60"

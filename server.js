@@ -56,8 +56,7 @@ app.get("/api/health", (req, res) => {
 });
 
 // FRONT (Next)
-app.use((req, res) => handle(req, res));
-
+app.all(/.*/, (req, res) => handle(req, res));
 
     app.listen(PORT, () => {
       console.log(`✅ Fullstack (API + Next) escuchando en puerto ${PORT}`);

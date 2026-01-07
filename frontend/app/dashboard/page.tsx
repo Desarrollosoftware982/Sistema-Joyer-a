@@ -4,7 +4,26 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ En Render (1 servicio): usar rutas relativas "/api/..."
+// ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
+
+function buildApiUrl(path: string) {
+  // Si viene definido (ej: en local con .env.local), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // En producción (Render) -> mismo dominio
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -96,16 +115,16 @@ export default function DashboardPage() {
         setLoading(true);
 
         const [resSummary, resTop, resLow, resLast] = await Promise.all([
-          fetch(`${API_URL}/api/dashboard/summary`, {
+          fetch(buildApiUrl("/api/dashboard/summary"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_URL}/api/dashboard/top-products`, {
+          fetch(buildApiUrl("/api/dashboard/top-products"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_URL}/api/dashboard/low-stock`, {
+          fetch(buildApiUrl("/api/dashboard/low-stock"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(`${API_URL}/api/dashboard/last-sales`, {
+          fetch(buildApiUrl("/api/dashboard/last-sales"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);

@@ -4,7 +4,26 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ En Render (1 servicio): usar rutas relativas "/api/..."
+// ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
+
+function buildApiUrl(path: string) {
+  // Si viene definido (ej: en local con .env.local), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // En producción (Render) -> mismo dominio
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -103,11 +122,13 @@ export default function ProductosPage() {
         setLoading(true);
 
         const [resCats, resProds] = await Promise.all([
-          fetch(`${API_URL}/api/catalog/categories`, {
+          fetch(buildApiUrl("/api/catalog/categories"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
           fetch(
-            `${API_URL}/api/catalog/products?page=1&pageSize=10&soloActivos=true`,
+            buildApiUrl(
+              "/api/catalog/products?page=1&pageSize=10&soloActivos=true"
+            ),
             {
               headers: { Authorization: `Bearer ${token}` },
             }
@@ -144,9 +165,7 @@ export default function ProductosPage() {
     setCodigoBarras(code);
   };
 
-  const handleCategoriasChange = (
-    e: React.ChangeEvent<HTMLSelectElement>
-  ) => {
+  const handleCategoriasChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const options = Array.from(e.target.selectedOptions).map((o) => o.value);
     setCategoriasSeleccionadas(options);
   };
@@ -197,7 +216,7 @@ export default function ProductosPage() {
         costoDesaduanaje: costoDesaduanaje ? Number(costoDesaduanaje) : 0,
       };
 
-      const res = await fetch(`${API_URL}/api/catalog/products`, {
+      const res = await fetch(buildApiUrl("/api/catalog/products"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

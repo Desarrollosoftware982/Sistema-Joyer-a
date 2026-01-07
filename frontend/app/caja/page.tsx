@@ -1,3 +1,4 @@
+// frontend/app/dashboard/caja/page.tsx
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -106,7 +107,7 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // ✅ NUEVO: ref + focus para escaneo
+  // ✅ ref + focus para escaneo
   // ==========================
   const barcodeRef = useRef<HTMLInputElement | null>(null);
 
@@ -235,7 +236,7 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // ✅ NUEVO) Cerrar caja (monto_cierre_reportado opcional)
+  // ✅ Cerrar caja (monto_cierre_reportado opcional)
   // ==========================
   const cerrarCaja = async () => {
     if (!token) return;
@@ -253,7 +254,7 @@ export default function CajaPage() {
       return;
     }
 
-    // Confirmación simple (sin dramas, pero con responsabilidad)
+    // Confirmación simple
     if (typeof window !== "undefined") {
       const ok = window.confirm(
         "¿Cerrar caja ahora? Asegúrate de no tener ventas pendientes."
@@ -433,7 +434,7 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // ✅ NUEVO: Agregar por código directo (HID / global)
+  // ✅ Agregar por código directo (HID / global)
   // ==========================
   const agregarPorCodigo = (codeRaw: string) => {
     const code = String(codeRaw || "").trim();
@@ -463,7 +464,7 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // ✅ NUEVO: Escaneo global para lectores tipo teclado (HID)
+  // ✅ Escaneo global para lectores tipo teclado (HID)
   // ==========================
   const scanBufferRef = useRef("");
   const scanLastTimeRef = useRef<number>(0);
@@ -879,7 +880,8 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // UI: POS (lo que ya tenías)
+  // UI: POS
+  // ✅ IMPLEMENTADO: input de búsqueda real (ya tenías el state + filtro, faltaba el UI)
   // ==========================
   const renderPOS = () => {
     return (
@@ -890,25 +892,64 @@ export default function CajaPage() {
             <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-2 mb-3">
               <h2 className="text-sm font-semibold">Productos</h2>
 
-              <div className="flex items-center gap-2">
-                <input
-                  ref={barcodeRef}
-                  value={barcodeInput}
-                  onChange={(e) => setBarcodeInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter") buscarYAgregarPorCodigo();
-                  }}
-                  placeholder="Escanear / escribir código y Enter"
-                  className="w-60 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
-                />
-                <button
-                  type="button"
-                  onClick={buscarYAgregarPorCodigo}
-                  className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1 text-[11px]"
-                >
-                  Agregar
-                </button>
+              {/* ✅ NUEVO (sin romper nada): búsqueda + escaneo */}
+              <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar (nombre, SKU, categoría...)"
+                    className="w-full sm:w-56 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                  />
+                  {search.trim() !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
+                      title="Limpiar búsqueda"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
+
+                <div className="flex items-center gap-2">
+                  <input
+                    ref={barcodeRef}
+                    value={barcodeInput}
+                    onChange={(e) => setBarcodeInput(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") buscarYAgregarPorCodigo();
+                    }}
+                    placeholder="Escanear / escribir código y Enter"
+                    className="w-full sm:w-60 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                  />
+                  <button
+                    type="button"
+                    onClick={buscarYAgregarPorCodigo}
+                    className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1 text-[11px]"
+                  >
+                    Agregar
+                  </button>
+                </div>
               </div>
+            </div>
+
+            {/* ✅ Indicador útil (no afecta lógica) */}
+            <div className="mb-2 text-[11px] text-[#c9b296] flex items-center justify-between">
+              <span>
+                Mostrando{" "}
+                <b className="text-[#f1e4d4]">{productosFiltrados.length}</b> de{" "}
+                <b className="text-[#f1e4d4]">{productos.length}</b>
+              </span>
+              <button
+                type="button"
+                onClick={focusBarcode}
+                className="rounded-full border border-[#7a2b33] px-3 py-1 hover:bg-[#4b141a]/80"
+                title="Enfocar escaneo"
+              >
+                🎯 Escanear
+              </button>
             </div>
 
             {loading && <p className="text-xs text-[#c9b296]">Cargando…</p>}
@@ -943,6 +984,7 @@ export default function CajaPage() {
                         <div className="font-medium">{p.nombre}</div>
                         <div className="text-[11px] text-[#c9b296]">
                           {p.sku} {p.codigo_barras ? `• ${p.codigo_barras}` : ""}
+                          {p.categoria ? ` • ${p.categoria}` : ""}
                         </div>
                       </td>
                       <td className="py-2 px-2 text-right text-[#e3c578]">
@@ -1129,7 +1171,7 @@ export default function CajaPage() {
             </div>
 
             <div className="flex items-center gap-2 justify-end">
-              {/* ✅ NUEVO: cerrar caja (solo si está ABIERTA) */}
+              {/* ✅ cerrar caja (solo si está ABIERTA) */}
               {cajaEstado === "ABIERTA" && (
                 <button
                   type="button"
@@ -1153,7 +1195,7 @@ export default function CajaPage() {
             </div>
           </div>
 
-          {/* ✅ Panel profesional para cierre */}
+          {/* Panel para cierre */}
           {cajaEstado === "ABIERTA" && showCerrarCaja && (
             <div className="mt-4 bg-[#3a0d12]/70 border border-[#5a1b22] rounded-2xl p-4">
               <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-3">

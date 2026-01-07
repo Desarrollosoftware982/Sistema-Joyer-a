@@ -4,26 +4,22 @@ import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-// ✅ En producción (Render, 1 servicio): usar misma URL con rutas relativas
-// ✅ En local: si definiste NEXT_PUBLIC_API_URL, lo respeta
+// ✅ Si NO hay NEXT_PUBLIC_API_URL (recomendado en Render 1 servicio), usa rutas relativas: "/api/..."
+// ✅ Si en local corres frontend separado, puedes setear NEXT_PUBLIC_API_URL="http://localhost:4000"
 const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
 const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
 
 function buildApiUrl(path: string) {
-  // si viene definido y es un URL completo, úsalo
-  if (API_BASE) return `${API_BASE}${path}`;
+  // Si no hay base, en producción 1 servicio funciona perfecto con rutas relativas
+  if (!API_BASE) return path;
 
-  // si no hay env (prod recomendado), usa mismo dominio
-  // (en local Next corre aparte del backend, así que cae al fallback localhost)
-  if (typeof window !== "undefined") {
-    const isLocalhost =
-      window.location.hostname === "localhost" ||
-      window.location.hostname === "127.0.0.1";
-    if (!isLocalhost) return path; // prod / render -> "/api/..."
+  // Blindaje: si alguien puso NEXT_PUBLIC_API_URL terminando en "/api"
+  // y el path ya empieza con "/api", evita duplicar "/api/api"
+  if (API_BASE.endsWith("/api") && path.startsWith("/api/")) {
+    return `${API_BASE}${path.replace(/^\/api/, "")}`;
   }
 
-  // fallback local
-  return `http://localhost:4000${path}`;
+  return `${API_BASE}${path}`;
 }
 
 interface LoginResponse {

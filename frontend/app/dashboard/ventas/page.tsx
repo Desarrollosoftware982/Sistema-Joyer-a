@@ -4,7 +4,26 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../../_components/AdminSidebar";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ En Render (1 servicio): usar rutas relativas "/api/..."
+// ✅ En local: si defines NEXT_PUBLIC_API_URL, lo respeta
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
+
+function buildApiUrl(path: string) {
+  // Si viene definido (ej: en local con .env.local), úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // En producción (Render) -> mismo dominio
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // "/api/..."
+  }
+
+  // Fallback local si Next corre separado del backend
+  return `http://localhost:4000${path}`;
+}
 
 interface User {
   id: string;
@@ -142,7 +161,7 @@ export default function VentasPage() {
       if (q.trim()) params.set("q", q.trim());
 
       const res = await fetch(
-        `${API_URL}/api/catalog/products?${params.toString()}`,
+        buildApiUrl(`/api/catalog/products?${params.toString()}`),
         {
           headers: { Authorization: `Bearer ${token}` },
         }
@@ -312,7 +331,7 @@ export default function VentasPage() {
         codigo_barras: nuevo.codigo_barras.trim() || null,
       };
 
-      const res = await fetch(`${API_URL}/api/sales/manual-product`, {
+      const res = await fetch(buildApiUrl("/api/sales/manual-product"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -395,7 +414,7 @@ export default function VentasPage() {
       setError(null);
       setSuccess(null);
 
-      const res = await fetch(`${API_URL}/api/sales/manual-product/${id}`, {
+      const res = await fetch(buildApiUrl(`/api/sales/manual-product/${id}`), {
         method: "DELETE",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -607,7 +626,7 @@ export default function VentasPage() {
             : p.precio_mayorista,
       }));
 
-      const res = await fetch(`${API_URL}/api/sales/bulk-products`, {
+      const res = await fetch(buildApiUrl("/api/sales/bulk-products"), {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -649,7 +668,7 @@ export default function VentasPage() {
       const formData = new FormData();
       formData.append("file", importFile);
 
-      const res = await fetch(`${API_URL}/api/sales/import-excel`, {
+      const res = await fetch(buildApiUrl("/api/sales/import-excel"), {
         method: "POST",
         headers: {
           Authorization: `Bearer ${token}`,
@@ -689,9 +708,7 @@ export default function VentasPage() {
         <header className="border-b border-[#5a1b22] bg-[#2b0a0b]/80 backdrop-blur px-4 md:px-8 py-4 sticky top-0 z-10">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-xl md:text-2xl font-semibold">
-                Ventas
-              </h1>
+              <h1 className="text-xl md:text-2xl font-semibold">Ventas</h1>
               <p className="text-xs md:text-sm text-[#c9b296] capitalize">
                 {today}
               </p>
@@ -731,8 +748,6 @@ export default function VentasPage() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
-
-
                 <button
                   type="button"
                   onClick={() => setVista("masivo")}
@@ -1007,8 +1022,6 @@ export default function VentasPage() {
                               />
                             </td>
 
-                            {/* SKU eliminado */}
-
                             {/* Nombre */}
                             <td className="py-2 px-2 text-[#f8f1e6] min-w-[160px]">
                               <input
@@ -1222,7 +1235,6 @@ export default function VentasPage() {
                     >
                       {importing ? "Procesando..." : "Subir y procesar archivo"}
                     </button>
-
                   </div>
                 </div>
 
