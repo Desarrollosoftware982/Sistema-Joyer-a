@@ -4,7 +4,27 @@ import Image from "next/image";
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:4000";
+// ✅ En producción (Render, 1 servicio): usar misma URL con rutas relativas
+// ✅ En local: si definiste NEXT_PUBLIC_API_URL, lo respeta
+const API_BASE_RAW = process.env.NEXT_PUBLIC_API_URL || "";
+const API_BASE = API_BASE_RAW.replace(/\/+$/, ""); // quita slash final si existe
+
+function buildApiUrl(path: string) {
+  // si viene definido y es un URL completo, úsalo
+  if (API_BASE) return `${API_BASE}${path}`;
+
+  // si no hay env (prod recomendado), usa mismo dominio
+  // (en local Next corre aparte del backend, así que cae al fallback localhost)
+  if (typeof window !== "undefined") {
+    const isLocalhost =
+      window.location.hostname === "localhost" ||
+      window.location.hostname === "127.0.0.1";
+    if (!isLocalhost) return path; // prod / render -> "/api/..."
+  }
+
+  // fallback local
+  return `http://localhost:4000${path}`;
+}
 
 interface LoginResponse {
   ok: boolean;
@@ -31,11 +51,9 @@ export default function LoginPage() {
     if (rol === "CAJERO") return "/caja";
     if (rol === "ADMIN") return "/dashboard";
 
-    // Opcionales (si existen en tu sistema)
     if (rol === "INVENTARIO") return "/dashboard/inventario";
     if (rol === "MAYORISTA") return "/dashboard";
 
-    // Fallback seguro
     return "/dashboard";
   };
 
@@ -51,29 +69,37 @@ export default function LoginPage() {
     try {
       setLoading(true);
 
-      const res = await fetch(`${API_URL}/api/auth/login`, {
+      const endpoint = buildApiUrl("/api/auth/login");
+
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email, password }),
       });
 
-      const data: LoginResponse = await res.json();
+      // Si el server devolvió HTML por error, esto te lo deja claro
+      const text = await res.text();
+      let data: LoginResponse;
+
+      try {
+        data = JSON.parse(text);
+      } catch {
+        console.error("Respuesta no JSON:", text);
+        setError("El servidor devolvió una respuesta inválida. Revisa /api.");
+        return;
+      }
 
       if (!res.ok || !data.ok || !data.token) {
         setError(data.message || "Credenciales inválidas.");
         return;
       }
 
-      // Guardar sesión
       localStorage.setItem("joyeria_token", data.token);
       if (data.user) {
         localStorage.setItem("joyeria_user", JSON.stringify(data.user));
       }
 
-      // ✅ Redirect por rol
       const nextPath = getRedirectByRole(data.user?.rol);
-
-      // Si el rol viniera vacío por alguna razón, igual no te deja varado
       router.push(nextPath);
     } catch (err) {
       console.error(err);
@@ -85,7 +111,6 @@ export default function LoginPage() {
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-[#2b0a0b] text-[#f8f1e6]">
-      {/* fondo suave */}
       <div className="pointer-events-none fixed inset-0 -z-10">
         <div className="absolute -top-40 -left-24 h-72 w-72 rounded-full bg-[#d6b25f]/15 blur-3xl" />
         <div className="absolute -bottom-40 -right-24 h-72 w-72 rounded-full bg-[#c39a4c]/15 blur-3xl" />
@@ -93,7 +118,6 @@ export default function LoginPage() {
 
       <div className="w-full max-w-md px-4">
         <section className="relative bg-[#3a0d12]/95 border border-[#5a1b22] rounded-3xl shadow-2xl shadow-black/40 px-6 py-7 md:px-7 md:py-8">
-          {/* pequeño acento */}
           <div className="absolute -top-6 right-10 h-16 w-16 rounded-full bg-gradient-to-br from-[#d6b25f]/45 via-[#e8cf8f]/30 to-[#b98c3f]/25 blur-2xl opacity-70" />
 
           <div className="relative">
