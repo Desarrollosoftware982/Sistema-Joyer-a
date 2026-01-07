@@ -50,13 +50,14 @@ nextApp
     app.use("/api/cash", cashRoutes);
     app.use("/api/cash-register", cashRegisterRoutes);
 
-    // Healthcheck para Render
-    app.get("/api/health", (req, res) => {
-      res.json({ ok: true, message: "Backend joyería OK", env: isProd ? "prod" : "dev" });
-    });
+ // Healthcheck
+app.get("/api/health", (req, res) => {
+  res.json({ ok: true, message: "Backend joyería OK", env: isProd ? "prod" : "dev" });
+});
 
-    // --- FRONTEND (Next) ---
-    app.all("*", (req, res) => handle(req, res));
+// FRONT (Next)
+app.use((req, res) => handle(req, res));
+
 
     app.listen(PORT, () => {
       console.log(`✅ Fullstack (API + Next) escuchando en puerto ${PORT}`);
