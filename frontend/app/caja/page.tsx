@@ -53,6 +53,8 @@ interface CierreCaja {
   total_general: number;
 }
 
+type ScanUiMode = "idle" | "ok" | "error";
+
 export default function CajaPage() {
   const router = useRouter();
 
@@ -123,6 +125,57 @@ export default function CajaPage() {
       barcodeRef.current?.select?.();
     } catch {}
   };
+
+  // ==========================
+  // ✅ UI Pro: estado del escaneo (solo visual)
+  // ==========================
+  const [scanUi, setScanUi] = useState<{ mode: ScanUiMode; text: string }>({
+    mode: "idle",
+    text: "Listo para escanear",
+  });
+  const scanUiTimerRef = useRef<any>(null);
+
+  const flashScanUi = (mode: ScanUiMode, text: string, ms = 900) => {
+    try {
+      if (scanUiTimerRef.current) clearTimeout(scanUiTimerRef.current);
+    } catch {}
+    setScanUi({ mode, text });
+    scanUiTimerRef.current = setTimeout(() => {
+      setScanUi({ mode: "idle", text: "Listo para escanear" });
+      scanUiTimerRef.current = null;
+    }, ms);
+  };
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (scanUiTimerRef.current) clearTimeout(scanUiTimerRef.current);
+      } catch {}
+      scanUiTimerRef.current = null;
+    };
+  }, []);
+
+  const scanTone =
+    scanUi.mode === "ok"
+      ? {
+          ring: "focus:ring-emerald-300",
+          border: "border-emerald-400/50",
+          icon: "text-emerald-200",
+          pill: "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
+        }
+      : scanUi.mode === "error"
+      ? {
+          ring: "focus:ring-red-300",
+          border: "border-red-400/40",
+          icon: "text-red-200",
+          pill: "border-red-400/30 bg-red-400/10 text-red-200",
+        }
+      : {
+          ring: "focus:ring-[#d6b25f]",
+          border: "border-[#6b232b]",
+          icon: "text-[#c9b296]",
+          pill: "border-[#7a2b33] bg-[#2b0a0b]/40 text-[#c9b296]",
+        };
 
   // ==========================
   // 1) Sesión + rol
@@ -452,6 +505,7 @@ export default function CajaPage() {
 
     if (!p) {
       setError("Código no encontrado.");
+      flashScanUi("error", "No encontrado");
       focusBarcode();
       return;
     }
@@ -459,6 +513,7 @@ export default function CajaPage() {
     addToCart(p);
     setBarcodeInput("");
     setError(null);
+    flashScanUi("ok", "Añadido");
     focusBarcode();
   };
 
@@ -909,24 +964,134 @@ export default function CajaPage() {
                   )}
                 </div>
 
-                <div className="flex items-center gap-2">
-                  <input
-                    ref={barcodeRef}
-                    value={barcodeInput}
-                    onChange={(e) => setBarcodeInput(e.target.value)}
-                    onKeyDown={(e) => {
-                      if (e.key === "Enter") buscarYAgregarPorCodigo();
-                    }}
-                    placeholder="Escanear / escribir código y Enter"
-                    className="w-full sm:w-60 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
-                  />
-                  <button
-                    type="button"
-                    onClick={buscarYAgregarPorCodigo}
-                    className="rounded-full border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-3 py-1 text-[11px]"
-                  >
-                    Agregar
-                  </button>
+                {/* ✅ PRO: input + icon + status + botón integrado */}
+                <div className="w-full sm:w-[360px]">
+                  <div className="flex items-center justify-between px-1 mb-1">
+                    <span className="text-[10px] text-[#c9b296]">
+                      Escaneo rápido (lector o teclado)
+                    </span>
+
+                    <span
+                      className={`text-[10px] inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${scanTone.pill}`}
+                      title="Estado de escaneo"
+                    >
+                      <span
+                        className={
+                          scanUi.mode === "ok"
+                            ? "animate-pulse"
+                            : scanUi.mode === "error"
+                            ? "animate-pulse"
+                            : ""
+                        }
+                      >
+                        {scanUi.mode === "ok"
+                          ? "✔"
+                          : scanUi.mode === "error"
+                          ? "⚠"
+                          : "●"}
+                      </span>
+                      {scanUi.text}
+                    </span>
+                  </div>
+
+                  <div className="relative">
+                    {/* icono */}
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        className={`${scanTone.icon}`}
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
+                      >
+                        <path
+                          d="M4 7V5a2 2 0 0 1 2-2h2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M20 7V5a2 2 0 0 0-2-2h-2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M4 17v2a2 2 0 0 0 2 2h2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M20 17v2a2 2 0 0 1-2 2h-2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M8 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M12 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M16 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                      </svg>
+                    </div>
+
+                    <input
+                      ref={barcodeRef}
+                      value={barcodeInput}
+                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") buscarYAgregarPorCodigo();
+                      }}
+                      placeholder="Escanear / escribir código y Enter"
+                      className={[
+                        "w-full rounded-full bg-[#2b0a0b]/60",
+                        "pl-9 pr-24 py-2",
+                        "text-[12px] text-[#f8f1e6] placeholder-[#b39878]",
+                        "border",
+                        scanTone.border,
+                        "focus:outline-none focus:ring-2",
+                        scanTone.ring,
+                        "transition-colors",
+                      ].join(" ")}
+                    />
+
+                    <button
+                      type="button"
+                      onClick={buscarYAgregarPorCodigo}
+                      className={[
+                        "absolute right-1 top-1/2 -translate-y-1/2",
+                        "rounded-full border border-[#d6b25f]/60",
+                        "bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20",
+                        "transition-colors px-3 py-1 text-[11px]",
+                        "h-[30px]",
+                        "inline-flex items-center gap-1",
+                      ].join(" ")}
+                      title="Agregar por código"
+                    >
+                      <span className="opacity-90">↵</span> Agregar
+                    </button>
+                  </div>
+
+                  <div className="mt-1 px-1 text-[10px] text-[#b39878]">
+                    Tip: con lector HID solo escanea y listo; el foco vuelve aquí
+                    automáticamente (como cajero feliz).
+                  </div>
                 </div>
               </div>
             </div>
