@@ -948,26 +948,27 @@ export default function CajaPage() {
               </div>
 
               <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start min-w-0">
-                {/* Buscar */}
-                <div className="flex items-center gap-2 min-w-0">
-                  <input
-                    value={search}
-                    onChange={(e) => setSearch(e.target.value)}
-                    placeholder="Buscar (nombre, SKU, categoría...)"
-                    className="w-full min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
-                  />
+              {/* Buscar */}
+<div className="flex items-center gap-2 w-full min-w-0">
+  <input
+    value={search}
+    onChange={(e) => setSearch(e.target.value)}
+    placeholder="Buscar (nombre, SKU, categoría...)"
+    className="flex-1 min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+  />
 
-                  {search.trim() !== "" && (
-                    <button
-                      type="button"
-                      onClick={() => setSearch("")}
-                      className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-2 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
-                      title="Limpiar búsqueda"
-                    >
-                      Limpiar
-                    </button>
-                  )}
-                </div>
+  {search.trim() !== "" && (
+    <button
+      type="button"
+      onClick={() => setSearch("")}
+      className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-2 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
+      title="Limpiar búsqueda"
+    >
+      Limpiar
+    </button>
+  )}
+</div>
+
 
                 {/* Escaneo */}
                 <div className="w-full min-w-0 lg:justify-self-end">
