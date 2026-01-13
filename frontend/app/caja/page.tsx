@@ -1166,8 +1166,7 @@ export default function CajaPage() {
                   </div>
 
                   <div className="mt-1 px-1 text-[10px] text-[#b39878]">
-                    Tip: con lector HID solo escanea y listo; el foco vuelve aquí
-                    automáticamente (como cajero feliz).
+                    Tip: con lector HID solo escanea y listo
                   </div>
                 </div>
               </div>
