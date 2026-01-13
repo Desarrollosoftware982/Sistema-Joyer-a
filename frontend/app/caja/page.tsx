@@ -941,161 +941,161 @@ export default function CajaPage() {
         <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 grid gap-4 md:grid-cols-2">
           {/* Productos */}
           <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 min-w-0">
-            {/* ✅ FIX PRO: evita overflow/solapamiento con Carrito */}
-            <div className="flex flex-col gap-3 mb-3 min-w-0">
-              <div className="flex items-start justify-between gap-3 flex-wrap min-w-0">
+            {/* ✅ FIX visual: Buscar ocupa el espacio, Escaneo a la derecha (sin huecos feos) */}
+            <div className="mb-3 min-w-0">
+              <div className="flex items-start justify-between gap-3 min-w-0">
                 <h2 className="text-sm font-semibold shrink-0">Productos</h2>
+              </div>
 
-                {/* Controles: wrap + shrink + min-w-0 */}
-                <div className="flex flex-col gap-2 w-full md:w-auto min-w-0 md:items-end lg:flex-row lg:flex-wrap lg:items-start lg:justify-end">
-                  {/* Buscar */}
-                  <div className="flex items-center gap-2 w-full sm:w-auto min-w-0">
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Buscar (nombre, SKU, categoría...)"
-                      className="w-full sm:w-56 min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
-                    />
-                    {search.trim() !== "" && (
-                      <button
-                        type="button"
-                        onClick={() => setSearch("")}
-                        className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-1 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
-                        title="Limpiar búsqueda"
+              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start min-w-0">
+                {/* Buscar */}
+                <div className="flex items-center gap-2 min-w-0">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar (nombre, SKU, categoría...)"
+                    className="w-full min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                  />
+
+                  {search.trim() !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-2 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
+                      title="Limpiar búsqueda"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
+
+                {/* Escaneo */}
+                <div className="w-full min-w-0 lg:justify-self-end">
+                  <div className="flex items-center justify-between px-1 mb-1 flex-wrap gap-2">
+                    <span className="text-[10px] text-[#c9b296]">
+                      Escaneo rápido (lector o teclado)
+                    </span>
+
+                    <span
+                      className={`text-[10px] inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${scanTone.pill}`}
+                      title="Estado de escaneo"
+                    >
+                      <span
+                        className={
+                          scanUi.mode === "ok"
+                            ? "animate-pulse"
+                            : scanUi.mode === "error"
+                            ? "animate-pulse"
+                            : ""
+                        }
                       >
-                        Limpiar
-                      </button>
-                    )}
+                        {scanUi.mode === "ok"
+                          ? "✔"
+                          : scanUi.mode === "error"
+                          ? "⚠"
+                          : "●"}
+                      </span>
+                      {scanUi.text}
+                    </span>
                   </div>
 
-                  {/* ✅ PRO: escáner sin ancho fijo, con max-width y sin overflow */}
-                  <div className="w-full sm:max-w-[360px] lg:max-w-[360px] min-w-0">
-                    <div className="flex items-center justify-between px-1 mb-1 flex-wrap gap-2">
-                      <span className="text-[10px] text-[#c9b296]">
-                        Escaneo rápido (lector o teclado)
-                      </span>
-
-                      <span
-                        className={`text-[10px] inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${scanTone.pill}`}
-                        title="Estado de escaneo"
+                  <div className="relative">
+                    {/* icono */}
+                    <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
+                      <svg
+                        width="16"
+                        height="16"
+                        viewBox="0 0 24 24"
+                        fill="none"
+                        className={`${scanTone.icon}`}
+                        xmlns="http://www.w3.org/2000/svg"
+                        aria-hidden="true"
                       >
-                        <span
-                          className={
-                            scanUi.mode === "ok"
-                              ? "animate-pulse"
-                              : scanUi.mode === "error"
-                              ? "animate-pulse"
-                              : ""
-                          }
-                        >
-                          {scanUi.mode === "ok"
-                            ? "✔"
-                            : scanUi.mode === "error"
-                            ? "⚠"
-                            : "●"}
-                        </span>
-                        {scanUi.text}
-                      </span>
+                        <path
+                          d="M4 7V5a2 2 0 0 1 2-2h2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M20 7V5a2 2 0 0 0-2-2h-2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M4 17v2a2 2 0 0 0 2 2h2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M20 17v2a2 2 0 0 1-2 2h-2"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M8 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M12 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                        <path
+                          d="M16 8v8"
+                          stroke="currentColor"
+                          strokeWidth="2"
+                          strokeLinecap="round"
+                        />
+                      </svg>
                     </div>
 
-                    <div className="relative">
-                      {/* icono */}
-                      <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
-                        <svg
-                          width="16"
-                          height="16"
-                          viewBox="0 0 24 24"
-                          fill="none"
-                          className={`${scanTone.icon}`}
-                          xmlns="http://www.w3.org/2000/svg"
-                          aria-hidden="true"
-                        >
-                          <path
-                            d="M4 7V5a2 2 0 0 1 2-2h2"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M20 7V5a2 2 0 0 0-2-2h-2"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M4 17v2a2 2 0 0 0 2 2h2"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M20 17v2a2 2 0 0 1-2 2h-2"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M8 8v8"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M12 8v8"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                          <path
-                            d="M16 8v8"
-                            stroke="currentColor"
-                            strokeWidth="2"
-                            strokeLinecap="round"
-                          />
-                        </svg>
-                      </div>
+                    <input
+                      ref={barcodeRef}
+                      value={barcodeInput}
+                      onChange={(e) => setBarcodeInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") buscarYAgregarPorCodigo();
+                      }}
+                      placeholder="Escanear / escribir código y Enter"
+                      className={[
+                        "w-full min-w-0 rounded-full bg-[#2b0a0b]/60",
+                        "pl-9 pr-24 py-2",
+                        "text-[12px] text-[#f8f1e6] placeholder-[#b39878]",
+                        "border",
+                        scanTone.border,
+                        "focus:outline-none focus:ring-2",
+                        scanTone.ring,
+                        "transition-colors",
+                      ].join(" ")}
+                    />
 
-                      <input
-                        ref={barcodeRef}
-                        value={barcodeInput}
-                        onChange={(e) => setBarcodeInput(e.target.value)}
-                        onKeyDown={(e) => {
-                          if (e.key === "Enter") buscarYAgregarPorCodigo();
-                        }}
-                        placeholder="Escanear / escribir código y Enter"
-                        className={[
-                          "w-full min-w-0 rounded-full bg-[#2b0a0b]/60",
-                          "pl-9 pr-24 py-2",
-                          "text-[12px] text-[#f8f1e6] placeholder-[#b39878]",
-                          "border",
-                          scanTone.border,
-                          "focus:outline-none focus:ring-2",
-                          scanTone.ring,
-                          "transition-colors",
-                        ].join(" ")}
-                      />
+                    <button
+                      type="button"
+                      onClick={buscarYAgregarPorCodigo}
+                      className={[
+                        "absolute right-1 top-1/2 -translate-y-1/2",
+                        "rounded-full border border-[#d6b25f]/60",
+                        "bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20",
+                        "transition-colors px-3 py-1 text-[11px]",
+                        "h-[30px] shrink-0",
+                        "inline-flex items-center gap-1",
+                      ].join(" ")}
+                      title="Agregar por código"
+                    >
+                      <span className="opacity-90">↵</span> Agregar
+                    </button>
+                  </div>
 
-                      <button
-                        type="button"
-                        onClick={buscarYAgregarPorCodigo}
-                        className={[
-                          "absolute right-1 top-1/2 -translate-y-1/2",
-                          "rounded-full border border-[#d6b25f]/60",
-                          "bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20",
-                          "transition-colors px-3 py-1 text-[11px]",
-                          "h-[30px] shrink-0",
-                          "inline-flex items-center gap-1",
-                        ].join(" ")}
-                        title="Agregar por código"
-                      >
-                        <span className="opacity-90">↵</span> Agregar
-                      </button>
-                    </div>
-
-                    <div className="mt-1 px-1 text-[10px] text-[#b39878]">
-                      Tip: con lector HID solo escanea y listo; el foco vuelve
-                      aquí automáticamente (como cajero feliz).
-                    </div>
+                  <div className="mt-1 px-1 text-[10px] text-[#b39878]">
+                    Tip: con lector HID solo escanea y listo; el foco vuelve
+                    aquí automáticamente (como cajero feliz).
                   </div>
                 </div>
               </div>
