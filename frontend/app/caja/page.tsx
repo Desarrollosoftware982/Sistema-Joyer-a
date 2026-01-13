@@ -947,11 +947,12 @@ export default function CajaPage() {
                 <h2 className="text-sm font-semibold shrink-0">Productos</h2>
               </div>
 
-              {/* ✅ Layout perfecto:
-                  - En md/lg (cuando ya estás en 2 columnas), se apilan para no cortar el buscar.
-                  - En XL, se ponen lado a lado y se ve elegante. */}
-              <div className="mt-3 grid gap-3 min-w-0 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] xl:items-start">
-                {/* Buscar */}
+              {/* ✅ Layout pedido:
+                  1) Buscar (línea 1)
+                  2) Escaneo (línea 2)
+                  Siempre apilado para evitar cortar el buscador */}
+              <div className="mt-3 flex flex-col gap-3 min-w-0">
+                {/* Buscar (línea 1) */}
                 <div className="flex items-center gap-2 w-full min-w-0">
                   <input
                     value={search}
@@ -972,8 +973,8 @@ export default function CajaPage() {
                   )}
                 </div>
 
-                {/* Escaneo */}
-                <div className="w-full min-w-0 xl:justify-self-end">
+                {/* Escaneo (línea 2) */}
+                <div className="w-full min-w-0">
                   <div className="flex items-center justify-between px-1 mb-1 flex-wrap gap-2">
                     <span className="text-[10px] text-[#c9b296]">
                       Escaneo rápido (lector o teclado)
@@ -1097,8 +1098,8 @@ export default function CajaPage() {
                   </div>
 
                   <div className="mt-1 px-1 text-[10px] text-[#b39878]">
-                    Tip: con lector HID solo escanea y listo; el foco vuelve
-                    aquí automáticamente (como cajero feliz).
+                    Tip: con lector HID solo escanea y listo; el foco vuelve aquí
+                    automáticamente (como cajero feliz).
                   </div>
                 </div>
               </div>
