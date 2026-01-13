@@ -272,8 +272,7 @@ export default function CajaPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+          Authorization: `Bearer ${token}` },
         body: JSON.stringify({ monto_apertura: Number(n.toFixed(2)) }),
       });
 
@@ -341,8 +340,7 @@ export default function CajaPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+          Authorization: `Bearer ${token}` },
         body: JSON.stringify(payload),
       });
 
@@ -493,24 +491,82 @@ export default function CajaPage() {
   };
 
   // ==========================
+  // ✅ Normalizadores robustos (HID / impresiones / ceros / controles invisibles)
+  // ==========================
+  const normScan = (v: any) =>
+    String(v ?? "")
+      .trim()
+      // quita controles invisibles (TAB, CR, LF, etc.)
+      .replace(/[\u0000-\u001F\u007F]/g, "")
+      // quita espacios internos
+      .replace(/\s+/g, "")
+      .toUpperCase();
+
+  const onlyDigits = (v: any) => normScan(v).replace(/\D+/g, "");
+  const stripLeadingZeros = (v: string) => v.replace(/^0+/, "");
+
+  // ==========================
   // ✅ Agregar por código directo (HID / global)
   // ==========================
   const agregarPorCodigo = (codeRaw: string) => {
-    const code = String(codeRaw || "").trim();
+    const code = normScan(codeRaw);
     if (!code) return;
 
-    const p =
-      productos.find((x) => String(x.codigo_barras || "").trim() === code) ||
-      productos.find((x) => String(x.sku || "").trim() === code);
+    const codeDigits = onlyDigits(code);
+    const codeNoZeros = stripLeadingZeros(codeDigits || "");
+
+    const match = (p: ProductoPublico, needle: string) => {
+      if (!needle) return false;
+
+      const cb = normScan(p.codigo_barras);
+      const sku = normScan(p.sku);
+
+      // 1) exacto normalizado
+      if (cb && cb === needle) return true;
+      if (sku && sku === needle) return true;
+
+      // 2) comparación por dígitos (si el lector manda solo números)
+      const cbDigits = onlyDigits(cb);
+      const skuDigits = onlyDigits(sku);
+
+      if (cbDigits && cbDigits === needle) return true;
+      if (skuDigits && skuDigits === needle) return true;
+
+      // 3) tolerancia con ceros a la izquierda (EAN/UPC)
+      if (cbDigits && stripLeadingZeros(cbDigits) === needle) return true;
+      if (skuDigits && stripLeadingZeros(skuDigits) === needle) return true;
+
+      return false;
+    };
+
+    // prioridad: exacto / dígitos / sin ceros
+    let p =
+      productos.find((x) => match(x, code)) ||
+      (codeDigits ? productos.find((x) => match(x, codeDigits)) : undefined) ||
+      (codeNoZeros ? productos.find((x) => match(x, codeNoZeros)) : undefined);
+
+    // fallback: endsWith SOLO si es único (evita colisiones)
+    if (!p && codeDigits) {
+      const cand = productos.filter((x) => {
+        const cbDigits = onlyDigits(x.codigo_barras);
+        const skuDigits = onlyDigits(x.sku);
+        return (
+          (cbDigits && cbDigits.endsWith(codeDigits)) ||
+          (skuDigits && skuDigits.endsWith(codeDigits))
+        );
+      });
+      if (cand.length === 1) p = cand[0];
+    }
 
     if (!p) {
-      setError("Código no encontrado.");
+      setError(`Código no encontrado: ${codeDigits || code}`);
       flashScanUi("error", "No encontrado");
       focusBarcode();
       return;
     }
 
     addToCart(p);
+
     setBarcodeInput("");
     setError(null);
     flashScanUi("ok", "Añadido");
@@ -519,9 +575,11 @@ export default function CajaPage() {
 
   // ==========================
   // 7) Scan / Enter por código (manual)
+  // ✅ IMPORTANTE: leer el valor directo del input (evita “valor cortado” por setState)
   // ==========================
-  const buscarYAgregarPorCodigo = () => {
-    agregarPorCodigo(barcodeInput);
+  const buscarYAgregarPorCodigo = (raw?: string) => {
+    const v = raw ?? barcodeRef.current?.value ?? barcodeInput;
+    agregarPorCodigo(v);
   };
 
   // ==========================
@@ -537,8 +595,8 @@ export default function CajaPage() {
     if (showCerrarCaja) return; // si estás cerrando caja, no secuestramos teclado
 
     const MIN_LEN = 3;
-    const FAST_MS = 45;
-    const IDLE_MS = 140;
+    const FAST_MS = 60;   // un poco más tolerante para inalámbricos
+    const IDLE_MS = 220;  // evita cortar por micro-lags
 
     const finishScan = () => {
       const code = scanBufferRef.current.trim();
@@ -556,6 +614,11 @@ export default function CajaPage() {
     };
 
     const onKeyDown = (e: KeyboardEvent) => {
+      // ✅ si el input de escaneo ya está enfocado, dejamos que el input maneje todo
+      if (barcodeRef.current && document.activeElement === barcodeRef.current) {
+        return;
+      }
+
       if (e.ctrlKey || e.metaKey || e.altKey) return;
 
       const key = e.key;
@@ -1065,7 +1128,12 @@ export default function CajaPage() {
                       value={barcodeInput}
                       onChange={(e) => setBarcodeInput(e.target.value)}
                       onKeyDown={(e) => {
-                        if (e.key === "Enter") buscarYAgregarPorCodigo();
+                        if (e.key === "Enter") {
+                          e.preventDefault();
+                          buscarYAgregarPorCodigo(
+                            (e.currentTarget as HTMLInputElement).value
+                          );
+                        }
                       }}
                       placeholder="Escanear / escribir código y Enter"
                       className={[
@@ -1082,7 +1150,7 @@ export default function CajaPage() {
 
                     <button
                       type="button"
-                      onClick={buscarYAgregarPorCodigo}
+                      onClick={() => buscarYAgregarPorCodigo()}
                       className={[
                         "absolute right-1 top-1/2 -translate-y-1/2",
                         "rounded-full border border-[#d6b25f]/60",
@@ -1203,8 +1271,7 @@ export default function CajaPage() {
                       <div>
                         <div className="text-xs font-semibold">{it.nombre}</div>
                         <div className="text-[11px] text-[#c9b296]">
-                          {it.sku}{" "}
-                          {it.codigo_barras ? `• ${it.codigo_barras}` : ""}
+                          {it.sku} {it.codigo_barras ? `• ${it.codigo_barras}` : ""}
                         </div>
                       </div>
 
@@ -1319,14 +1386,10 @@ export default function CajaPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl md:text-2xl font-semibold">
-                  Panel de Caja
-                </h1>
+                <h1 className="text-xl md:text-2xl font-semibold">Panel de Caja</h1>
                 <span className={estadoBadge(cajaEstado)}>{cajaEstado}</span>
               </div>
-              <p className="text-xs md:text-sm text-[#c9b296] capitalize">
-                {today}
-              </p>
+              <p className="text-xs md:text-sm text-[#c9b296] capitalize">{today}</p>
 
               {cajaEstado === "ABIERTA" && (
                 <p className="text-[11px] text-[#b39878] mt-1">
@@ -1372,9 +1435,7 @@ export default function CajaPage() {
 
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-[#e3c578] text-sm font-semibold">
-                      Q
-                    </span>
+                    <span className="text-[#e3c578] text-sm font-semibold">Q</span>
                     <input
                       value={montoCierreReportado}
                       onChange={(e) => setMontoCierreReportado(e.target.value)}
@@ -1407,9 +1468,7 @@ export default function CajaPage() {
             </div>
           )}
 
-          {!!error && (
-            <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>
-          )}
+          {!!error && <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>}
         </header>
 
         {cajaEstado === "CARGANDO" || loadingCaja ? (
