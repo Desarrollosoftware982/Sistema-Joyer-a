@@ -941,37 +941,39 @@ export default function CajaPage() {
         <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 grid gap-4 md:grid-cols-2">
           {/* Productos */}
           <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 min-w-0">
-            {/* ✅ FIX visual: Buscar ocupa el espacio, Escaneo a la derecha (sin huecos feos) */}
+            {/* Header */}
             <div className="mb-3 min-w-0">
-              <div className="flex items-start justify-between gap-3 min-w-0">
+              <div className="flex items-center justify-between gap-3 min-w-0">
                 <h2 className="text-sm font-semibold shrink-0">Productos</h2>
               </div>
 
-              <div className="mt-3 grid gap-3 lg:grid-cols-[minmax(0,1fr)_minmax(360px,420px)] lg:items-start min-w-0">
-              {/* Buscar */}
-<div className="flex items-center gap-2 w-full min-w-0">
-  <input
-    value={search}
-    onChange={(e) => setSearch(e.target.value)}
-    placeholder="Buscar (nombre, SKU, categoría...)"
-    className="flex-1 min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
-  />
+              {/* ✅ Layout perfecto:
+                  - En md/lg (cuando ya estás en 2 columnas), se apilan para no cortar el buscar.
+                  - En XL, se ponen lado a lado y se ve elegante. */}
+              <div className="mt-3 grid gap-3 min-w-0 xl:grid-cols-[minmax(0,1fr)_minmax(280px,360px)] xl:items-start">
+                {/* Buscar */}
+                <div className="flex items-center gap-2 w-full min-w-0">
+                  <input
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                    placeholder="Buscar (nombre, SKU, categoría...)"
+                    className="flex-1 min-w-0 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-[11px] text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                  />
 
-  {search.trim() !== "" && (
-    <button
-      type="button"
-      onClick={() => setSearch("")}
-      className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-2 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
-      title="Limpiar búsqueda"
-    >
-      Limpiar
-    </button>
-  )}
-</div>
-
+                  {search.trim() !== "" && (
+                    <button
+                      type="button"
+                      onClick={() => setSearch("")}
+                      className="shrink-0 rounded-full border border-[#7a2b33] px-3 py-2 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
+                      title="Limpiar búsqueda"
+                    >
+                      Limpiar
+                    </button>
+                  )}
+                </div>
 
                 {/* Escaneo */}
-                <div className="w-full min-w-0 lg:justify-self-end">
+                <div className="w-full min-w-0 xl:justify-self-end">
                   <div className="flex items-center justify-between px-1 mb-1 flex-wrap gap-2">
                     <span className="text-[10px] text-[#c9b296]">
                       Escaneo rápido (lector o teclado)
