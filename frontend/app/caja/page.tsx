@@ -93,6 +93,26 @@ export default function CajaPage() {
   const [metodoPago, setMetodoPago] = useState<MetodoPago>("EFECTIVO");
   const [efectivoRecibido, setEfectivoRecibido] = useState<string>("");
 
+  // ==========================
+  // ✅ Carrito móvil (botón flotante + drawer)
+  // ==========================
+  const [showCartMobile, setShowCartMobile] = useState(false);
+
+  const cartCount = useMemo(
+    () => cart.reduce((acc, it) => acc + (Number(it.qty) || 0), 0),
+    [cart]
+  );
+
+  // ✅ evita scroll del fondo cuando el drawer está abierto
+  useEffect(() => {
+    if (!showCartMobile) return;
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = prev;
+    };
+  }, [showCartMobile]);
+
   const today = new Date().toLocaleDateString("es-GT", {
     weekday: "long",
     year: "numeric",
@@ -272,7 +292,8 @@ export default function CajaPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` },
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify({ monto_apertura: Number(n.toFixed(2)) }),
       });
 
@@ -340,7 +361,8 @@ export default function CajaPage() {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${token}` },
+          Authorization: `Bearer ${token}`,
+        },
         body: JSON.stringify(payload),
       });
 
@@ -593,10 +615,11 @@ export default function CajaPage() {
   useEffect(() => {
     if (cajaEstado !== "ABIERTA") return;
     if (showCerrarCaja) return; // si estás cerrando caja, no secuestramos teclado
+    if (showCartMobile) return; // ✅ si el carrito móvil está abierto, no secuestramos teclado
 
     const MIN_LEN = 3;
-    const FAST_MS = 60;   // un poco más tolerante para inalámbricos
-    const IDLE_MS = 220;  // evita cortar por micro-lags
+    const FAST_MS = 60; // un poco más tolerante para inalámbricos
+    const IDLE_MS = 220; // evita cortar por micro-lags
 
     const finishScan = () => {
       const code = scanBufferRef.current.trim();
@@ -669,7 +692,7 @@ export default function CajaPage() {
       scanActiveRef.current = false;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [cajaEstado, showCerrarCaja, productos]);
+  }, [cajaEstado, showCerrarCaja, showCartMobile, productos]);
 
   // ✅ Bonus: cuando se abre la caja, enfoca el input de escaneo
   useEffect(() => {
@@ -996,12 +1019,161 @@ export default function CajaPage() {
   };
 
   // ==========================
+  // ✅ UI: Carrito (reutilizable) para Desktop y Drawer móvil
+  // ==========================
+  const renderCarritoUI = (opts?: { showClose?: boolean }) => {
+    const showClose = !!opts?.showClose;
+
+    return (
+      <>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold">Carrito</h2>
+
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={clearCart}
+              className="text-[11px] rounded-full border border-[#7a2b33] px-3 py-1 hover:bg-[#4b141a]/80"
+            >
+              Vaciar
+            </button>
+
+            {showClose && (
+              <button
+                type="button"
+                onClick={() => setShowCartMobile(false)}
+                className="text-[11px] rounded-full border border-[#7a2b33] px-3 py-1 hover:bg-[#4b141a]/80"
+              >
+                Cerrar
+              </button>
+            )}
+          </div>
+        </div>
+
+        {cart.length === 0 ? (
+          <p className="text-xs text-[#c9b296]">
+            Agrega productos para iniciar una venta.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {cart.map((it) => (
+              <div
+                key={it.producto_id}
+                className="border border-[#5a1b22] rounded-xl p-3 bg-[#2b0a0b]/40"
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div>
+                    <div className="text-xs font-semibold">{it.nombre}</div>
+                    <div className="text-[11px] text-[#c9b296]">
+                      {it.sku}{" "}
+                      {it.codigo_barras ? `• ${it.codigo_barras}` : ""}
+                    </div>
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => removeItem(it.producto_id)}
+                    className="text-[11px] rounded-full border border-[#7a2b33] px-2 py-0.5 hover:bg-[#4b141a]/80"
+                  >
+                    Quitar
+                  </button>
+                </div>
+
+                <div className="flex items-center justify-between mt-2">
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setQty(it.producto_id, it.qty - 1)}
+                      className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
+                    >
+                      −
+                    </button>
+                    <input
+                      value={it.qty}
+                      onChange={(e) =>
+                        setQty(it.producto_id, Number(e.target.value || 1))
+                      }
+                      className="w-14 text-center rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-2 py-1 text-[11px]"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setQty(it.producto_id, it.qty + 1)}
+                      className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
+                    >
+                      +
+                    </button>
+                  </div>
+
+                  <div className="text-[11px] text-[#e3c578]">
+                    {fmtQ(it.qty * it.precio_unitario)}
+                  </div>
+                </div>
+              </div>
+            ))}
+
+            <div className="border-t border-[#5a1b22] pt-3 mt-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] text-[#c9b296]">Método de pago</span>
+                <select
+                  value={metodoPago}
+                  onChange={(e) => setMetodoPago(e.target.value as MetodoPago)}
+                  className="rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
+                >
+                  <option value="EFECTIVO">EFECTIVO</option>
+                  <option value="TARJETA">TARJETA</option>
+                  <option value="TRANSFERENCIA">TRANSFERENCIA</option>
+                </select>
+              </div>
+
+              {metodoPago === "EFECTIVO" && (
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] text-[#c9b296]">
+                    Efectivo recibido
+                  </span>
+                  <input
+                    value={efectivoRecibido}
+                    onChange={(e) => setEfectivoRecibido(e.target.value)}
+                    placeholder="0.00"
+                    className="w-32 text-right rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
+                  />
+                </div>
+              )}
+
+              <div className="flex items-center justify-between text-sm">
+                <b>Total</b>
+                <b className="text-[#e3c578]">{fmtQ(total)}</b>
+              </div>
+
+              {metodoPago === "EFECTIVO" && (
+                <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
+                  <span>Cambio</span>
+                  <span className="text-[#f1e4d4]">{fmtQ(cambio)}</span>
+                </div>
+              )}
+
+              <button
+                type="button"
+                onClick={confirmarVenta}
+                disabled={loading}
+                className="w-full rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-3 text-sm font-semibold disabled:opacity-40"
+              >
+                ✅ Confirmar venta
+              </button>
+            </div>
+          </div>
+        )}
+      </>
+    );
+  };
+
+  // ==========================
   // UI: POS
   // ==========================
   const renderPOS = () => {
     return (
       <>
-        <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 grid gap-4 md:grid-cols-2">
+        {/* ✅ pb extra SOLO móvil para que el botón flotante no estorbe */}
+        <main className="flex-1 w-full max-w-6xl mx-auto px-4 md:px-8 py-6 pb-24 md:pb-6 grid gap-4 md:grid-cols-2">
           {/* Productos */}
           <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4 min-w-0">
             {/* Header */}
@@ -1242,136 +1414,66 @@ export default function CajaPage() {
             </div>
           </section>
 
-          {/* Carrito */}
-          <section className="bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4">
-            <div className="flex items-center justify-between mb-3">
-              <h2 className="text-sm font-semibold">Carrito</h2>
-              <button
-                type="button"
-                onClick={clearCart}
-                className="text-[11px] rounded-full border border-[#7a2b33] px-3 py-1 hover:bg-[#4b141a]/80"
-              >
-                Vaciar
-              </button>
-            </div>
-
-            {cart.length === 0 ? (
-              <p className="text-xs text-[#c9b296]">
-                Agrega productos para iniciar una venta.
-              </p>
-            ) : (
-              <div className="space-y-2">
-                {cart.map((it) => (
-                  <div
-                    key={it.producto_id}
-                    className="border border-[#5a1b22] rounded-xl p-3 bg-[#2b0a0b]/40"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-semibold">{it.nombre}</div>
-                        <div className="text-[11px] text-[#c9b296]">
-                          {it.sku} {it.codigo_barras ? `• ${it.codigo_barras}` : ""}
-                        </div>
-                      </div>
-
-                      <button
-                        type="button"
-                        onClick={() => removeItem(it.producto_id)}
-                        className="text-[11px] rounded-full border border-[#7a2b33] px-2 py-0.5 hover:bg-[#4b141a]/80"
-                      >
-                        Quitar
-                      </button>
-                    </div>
-
-                    <div className="flex items-center justify-between mt-2">
-                      <div className="flex items-center gap-2">
-                        <button
-                          type="button"
-                          onClick={() => setQty(it.producto_id, it.qty - 1)}
-                          className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
-                        >
-                          −
-                        </button>
-                        <input
-                          value={it.qty}
-                          onChange={(e) =>
-                            setQty(it.producto_id, Number(e.target.value || 1))
-                          }
-                          className="w-14 text-center rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-2 py-1 text-[11px]"
-                        />
-                        <button
-                          type="button"
-                          onClick={() => setQty(it.producto_id, it.qty + 1)}
-                          className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px]"
-                        >
-                          +
-                        </button>
-                      </div>
-
-                      <div className="text-[11px] text-[#e3c578]">
-                        {fmtQ(it.qty * it.precio_unitario)}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-
-                <div className="border-t border-[#5a1b22] pt-3 mt-3 space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[11px] text-[#c9b296]">
-                      Método de pago
-                    </span>
-                    <select
-                      value={metodoPago}
-                      onChange={(e) =>
-                        setMetodoPago(e.target.value as MetodoPago)
-                      }
-                      className="rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
-                    >
-                      <option value="EFECTIVO">EFECTIVO</option>
-                      <option value="TARJETA">TARJETA</option>
-                      <option value="TRANSFERENCIA">TRANSFERENCIA</option>
-                    </select>
-                  </div>
-
-                  {metodoPago === "EFECTIVO" && (
-                    <div className="flex items-center justify-between">
-                      <span className="text-[11px] text-[#c9b296]">
-                        Efectivo recibido
-                      </span>
-                      <input
-                        value={efectivoRecibido}
-                        onChange={(e) => setEfectivoRecibido(e.target.value)}
-                        placeholder="0.00"
-                        className="w-32 text-right rounded-full border border-[#6b232b] bg-[#3a0d12]/80 px-3 py-1 text-[11px]"
-                      />
-                    </div>
-                  )}
-
-                  <div className="flex items-center justify-between text-sm">
-                    <b>Total</b>
-                    <b className="text-[#e3c578]">{fmtQ(total)}</b>
-                  </div>
-
-                  {metodoPago === "EFECTIVO" && (
-                    <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
-                      <span>Cambio</span>
-                      <span className="text-[#f1e4d4]">{fmtQ(cambio)}</span>
-                    </div>
-                  )}
-
-                  <button
-                    type="button"
-                    onClick={confirmarVenta}
-                    disabled={loading}
-                    className="w-full rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-3 text-sm font-semibold disabled:opacity-40"
-                  >
-                    ✅ Confirmar venta
-                  </button>
-                </div>
-              </div>
-            )}
+          {/* ✅ Carrito: SOLO md+ (desktop/tablet) */}
+          <section className="hidden md:block bg-[#3a0d12]/80 border border-[#5a1b22] rounded-2xl p-4">
+            {renderCarritoUI()}
           </section>
         </main>
+
+        {/* ✅ Botón flotante: SOLO móvil */}
+        <button
+          type="button"
+          onClick={() => setShowCartMobile(true)}
+          disabled={cartCount === 0}
+          className={[
+            "md:hidden fixed bottom-5 right-5 z-40",
+            "h-14 w-14 rounded-full",
+            "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
+            "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
+            "flex items-center justify-center",
+            cartCount === 0 ? "opacity-40" : "opacity-100",
+          ].join(" ")}
+          title="Ver carrito"
+        >
+          <span className="text-xl">🛒</span>
+
+          {cartCount > 0 && (
+            <span
+              className={[
+                "absolute -top-1 -right-1",
+                "min-w-[22px] h-[22px] px-1",
+                "rounded-full text-[11px] font-bold",
+                "bg-[#d6b25f] text-[#2b0a0b]",
+                "flex items-center justify-center",
+              ].join(" ")}
+            >
+              {cartCount}
+            </span>
+          )}
+        </button>
+
+        {/* ✅ Drawer/Modal: SOLO móvil */}
+        {showCartMobile && (
+          <div className="md:hidden fixed inset-0 z-50">
+            {/* backdrop */}
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setShowCartMobile(false)}
+            />
+
+            {/* drawer */}
+            <div
+              className={[
+                "absolute left-0 right-0 bottom-0",
+                "max-h-[85vh] overflow-auto",
+                "bg-[#3a0d12]/95 border-t border-[#5a1b22]",
+                "rounded-t-2xl p-4",
+              ].join(" ")}
+            >
+              {renderCarritoUI({ showClose: true })}
+            </div>
+          </div>
+        )}
       </>
     );
   };
@@ -1385,10 +1487,14 @@ export default function CajaPage() {
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
               <div className="flex items-center gap-2">
-                <h1 className="text-xl md:text-2xl font-semibold">Panel de Caja</h1>
+                <h1 className="text-xl md:text-2xl font-semibold">
+                  Panel de Caja
+                </h1>
                 <span className={estadoBadge(cajaEstado)}>{cajaEstado}</span>
               </div>
-              <p className="text-xs md:text-sm text-[#c9b296] capitalize">{today}</p>
+              <p className="text-xs md:text-sm text-[#c9b296] capitalize">
+                {today}
+              </p>
 
               {cajaEstado === "ABIERTA" && (
                 <p className="text-[11px] text-[#b39878] mt-1">
@@ -1434,7 +1540,9 @@ export default function CajaPage() {
 
                 <div className="flex items-center gap-2">
                   <div className="flex items-center gap-2">
-                    <span className="text-[#e3c578] text-sm font-semibold">Q</span>
+                    <span className="text-[#e3c578] text-sm font-semibold">
+                      Q
+                    </span>
                     <input
                       value={montoCierreReportado}
                       onChange={(e) => setMontoCierreReportado(e.target.value)}
@@ -1467,7 +1575,9 @@ export default function CajaPage() {
             </div>
           )}
 
-          {!!error && <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>}
+          {!!error && (
+            <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>
+          )}
         </header>
 
         {cajaEstado === "CARGANDO" || loadingCaja ? (
