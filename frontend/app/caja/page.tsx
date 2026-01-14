@@ -1420,42 +1420,44 @@ export default function CajaPage() {
           </section>
         </main>
 
-        {/* ✅ Botón flotante: SOLO móvil (ajustado: más cerca y más pequeño) */}
-        <button
-          type="button"
-          onClick={() => setShowCartMobile(true)}
-          disabled={cartCount === 0}
-          className={[
-            "md:hidden fixed z-40",
-            // ✅ alineación estándar (más pegado al borde, como el menú)
-            "right-4",
-            // ✅ más cerca del botón del menú (antes estaba muy alto)
-            "bottom-[calc(1rem+env(safe-area-inset-bottom)+3.25rem)]",
-            // ✅ más compacto (similar al botón menú)
-            "h-11 w-11 rounded-full",
-            "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
-            "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
-            "flex items-center justify-center",
-            cartCount === 0 ? "opacity-40" : "opacity-100",
-          ].join(" ")}
-          title="Ver carrito"
-        >
-          <span className="text-base">🛒</span>
+        {/* ✅ Botón flotante: SOLO móvil (mismo tamaño que el menú) */}
+<button
+  type="button"
+  onClick={() => setShowCartMobile(true)}
+  disabled={cartCount === 0}
+  className={[
+    "md:hidden fixed z-40",
+    "right-4",
+    "bottom-[calc(1rem+env(safe-area-inset-bottom)+3.25rem)]",
 
-          {cartCount > 0 && (
-            <span
-              className={[
-                "absolute -top-1 -right-1",
-                "min-w-[18px] h-[18px] px-1",
-                "rounded-full text-[10px] font-bold",
-                "bg-[#d6b25f] text-[#2b0a0b]",
-                "flex items-center justify-center",
-              ].join(" ")}
-            >
-              {cartCount}
-            </span>
-          )}
-        </button>
+    // ✅ MISMO tamaño que botón menú (3 barras)
+    "h-10 w-10 rounded-full",
+
+    "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
+    "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
+    "flex items-center justify-center",
+    cartCount === 0 ? "opacity-40" : "opacity-100",
+  ].join(" ")}
+  title="Ver carrito"
+>
+  {/* ✅ Icono un poco más pequeño para que se vea “igual de denso” */}
+  <span className="text-sm leading-none">🛒</span>
+
+  {cartCount > 0 && (
+    <span
+      className={[
+        "absolute -top-1 -right-1",
+        "min-w-[16px] h-[16px] px-1",
+        "rounded-full text-[9px] font-bold",
+        "bg-[#d6b25f] text-[#2b0a0b]",
+        "flex items-center justify-center",
+      ].join(" ")}
+    >
+      {cartCount}
+    </span>
+  )}
+</button>
+
 
         {/* ✅ Drawer/Modal: SOLO móvil */}
         {showCartMobile && (
