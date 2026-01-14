@@ -1420,37 +1420,45 @@ export default function CajaPage() {
           </section>
         </main>
 
-        {/* ✅ Botón flotante: SOLO móvil */}
-        <button
-          type="button"
-          onClick={() => setShowCartMobile(true)}
-          disabled={cartCount === 0}
-          className={[
-            "md:hidden fixed bottom-5 right-5 z-40",
-            "h-14 w-14 rounded-full",
-            "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
-            "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
-            "flex items-center justify-center",
-            cartCount === 0 ? "opacity-40" : "opacity-100",
-          ].join(" ")}
-          title="Ver carrito"
-        >
-          <span className="text-xl">🛒</span>
+        {/* ✅ Botón flotante: SOLO móvil (arriba del botón menú) */}
+<button
+  type="button"
+  onClick={() => setShowCartMobile(true)}
+  disabled={cartCount === 0}
+  className={[
+    "md:hidden fixed z-40",
+    // ✅ MISMA alineación a la derecha que el menú
+    "right-5",
+    // ✅ SUBIDO arriba del botón menú + safe-area iPhone
+    "bottom-[calc(1.25rem+env(safe-area-inset-bottom)+4.25rem)]",
 
-          {cartCount > 0 && (
-            <span
-              className={[
-                "absolute -top-1 -right-1",
-                "min-w-[22px] h-[22px] px-1",
-                "rounded-full text-[11px] font-bold",
-                "bg-[#d6b25f] text-[#2b0a0b]",
-                "flex items-center justify-center",
-              ].join(" ")}
-            >
-              {cartCount}
-            </span>
-          )}
-        </button>
+    // ✅ MISMO tamaño “tipo botón menú”
+    "h-12 w-12 rounded-full",
+
+    "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
+    "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
+    "flex items-center justify-center",
+    cartCount === 0 ? "opacity-40" : "opacity-100",
+  ].join(" ")}
+  title="Ver carrito"
+>
+  <span className="text-lg">🛒</span>
+
+  {cartCount > 0 && (
+    <span
+      className={[
+        "absolute -top-1 -right-1",
+        "min-w-[20px] h-[20px] px-1",
+        "rounded-full text-[10px] font-bold",
+        "bg-[#d6b25f] text-[#2b0a0b]",
+        "flex items-center justify-center",
+      ].join(" ")}
+    >
+      {cartCount}
+    </span>
+  )}
+</button>
+
 
         {/* ✅ Drawer/Modal: SOLO móvil */}
         {showCartMobile && (
