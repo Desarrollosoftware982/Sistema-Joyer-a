@@ -1,6 +1,5 @@
-import type { NextConfig } from "next";
-
-const nextConfig: NextConfig = {
+/** @type {import('next').NextConfig} */
+const nextConfig = {
   // Mejor para entornos tipo Render (y despliegues más “limpios”)
   output: "standalone",
 
@@ -10,4 +9,4 @@ const nextConfig: NextConfig = {
   compress: true,
 };
 
-export default nextConfig;
+module.exports = nextConfig;
