@@ -1,11 +1,18 @@
 // server.js (en la raíz)
 const path = require("path");
+const fs = require("fs");
 const express = require("express");
 const cors = require("cors");
 const dotenv = require("dotenv");
 
-// Carga env local si existe (en Render se usan Environment Variables del dashboard)
-dotenv.config({ path: path.join(__dirname, "backend", ".env") });
+// ✅ En producción (Render) NO dependemos de archivo .env.
+// ✅ En local sí lo cargamos desde backend/.env si existe.
+if (process.env.NODE_ENV !== "production") {
+  const envPath = path.join(__dirname, "backend", ".env");
+  if (fs.existsSync(envPath)) {
+    dotenv.config({ path: envPath });
+  }
+}
 
 const PORT = process.env.PORT || 4000;
 const isProd = process.env.NODE_ENV === "production";
@@ -43,7 +50,6 @@ nextApp
     app.use(cors());
     app.use(express.json({ limit: "10mb" }));
 
-
     // --- API ---
     app.use("/api/auth", authRoutes);
     app.use("/api/catalog", catalogRoutes);
@@ -58,13 +64,17 @@ nextApp
     app.use("/api/admin", adminRoutes);
     app.use("/api/reportes", reportesRoutes);
 
- // Healthcheck
-app.get("/api/health", (req, res) => {
-  res.json({ ok: true, message: "Backend joyería OK", env: isProd ? "prod" : "dev" });
-});
+    // Healthcheck
+    app.get("/api/health", (req, res) => {
+      res.json({
+        ok: true,
+        message: "Backend joyería OK",
+        env: isProd ? "prod" : "dev",
+      });
+    });
 
-// FRONT (Next)
-app.all(/.*/, (req, res) => handle(req, res));
+    // FRONT (Next)
+    app.all(/.*/, (req, res) => handle(req, res));
 
     app.listen(PORT, () => {
       console.log(`✅ Fullstack (API + Next) escuchando en puerto ${PORT}`);
