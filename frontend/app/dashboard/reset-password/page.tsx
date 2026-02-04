@@ -1,7 +1,7 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 const API_URL =
@@ -9,7 +9,7 @@ const API_URL =
     process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/$/, "")) ||
   (typeof window !== "undefined" ? window.location.origin : "http://localhost:4000");
 
-export default function ResetPasswordPage() {
+function ResetPasswordInner() {
   const router = useRouter();
   const sp = useSearchParams();
 
@@ -55,7 +55,7 @@ export default function ResetPasswordPage() {
         if (!res.ok || !data?.ok) {
           setInvalidLink(true);
         }
-      } catch (err) {
+      } catch {
         if (!alive) return;
         setInvalidLink(true);
       } finally {
@@ -293,6 +293,20 @@ export default function ResetPasswordPage() {
         </section>
       </div>
     </div>
+  );
+}
+
+export default function ResetPasswordPage() {
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-screen flex items-center justify-center bg-[#2b0a0b] text-[#f8f1e6]">
+          <div className="text-[11px] text-[#c9b296] text-center">Cargando...</div>
+        </div>
+      }
+    >
+      <ResetPasswordInner />
+    </Suspense>
   );
 }
 
