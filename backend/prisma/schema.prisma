@@ -269,20 +269,22 @@ model roles {
 }
 
 model sucursales {
-  id           String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  nombre       String
-  codigo       String         @unique
-  direccion    String?
-  telefono     String?
-  activo       Boolean        @default(true)
-  creado_en    DateTime       @default(now()) @db.Timestamptz(6)
-  cierres_caja cierres_caja[]
-  compras      compras[]
-  cotizaciones cotizaciones[]
-  dispositivos dispositivos[]
-  ubicaciones  ubicaciones[]
-  usuarios     usuarios[]
-  ventas       ventas[]
+  id                  String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nombre              String
+  codigo              String                @unique
+  direccion           String?
+  telefono            String?
+  activo              Boolean               @default(true)
+  creado_en           DateTime              @default(now()) @db.Timestamptz(6)
+  caja_chica_entregas caja_chica_entregas[]
+  caja_chica_gastos   caja_chica_gastos[]
+  cierres_caja        cierres_caja[]
+  compras             compras[]
+  cotizaciones        cotizaciones[]
+  dispositivos        dispositivos[]
+  ubicaciones         ubicaciones[]
+  usuarios            usuarios[]
+  ventas              ventas[]
 }
 
 model ubicaciones {
@@ -300,24 +302,57 @@ model ubicaciones {
 }
 
 model usuarios {
-  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  nombre                 String
-  email                  String                   @unique
-  pass_hash              String
-  rol_id                 String                   @db.Uuid
-  activo                 Boolean                  @default(true)
-  creado_en              DateTime                 @default(now()) @db.Timestamptz(6)
-  sucursal_id            String?                  @db.Uuid
-  cierres_caja           cierres_caja[]
-  compras                compras[]
-  cotizaciones           cotizaciones[]
-  inventario_movimientos inventario_movimientos[]
-  roles                  roles                    @relation(fields: [rol_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
-  sucursales             sucursales?              @relation(fields: [sucursal_id], references: [id], map: "usuarios_sucursal_fk")
-  ventas                 ventas[]
+  id                           String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  nombre                       String
+  email                        String                   @unique
+  pass_hash                    String
+  rol_id                       String                   @db.Uuid
+  activo                       Boolean                  @default(true)
+  creado_en                    DateTime                 @default(now()) @db.Timestamptz(6)
+  sucursal_id                  String?                  @db.Uuid
+  username                     String?                  @unique
+  failed_login_count           Int                      @default(0)
+  lock_until                   DateTime?                @db.Timestamptz(6)
+  password_changed_at          DateTime?                @db.Timestamptz(6)
+  mfa_enabled                  Boolean                  @default(false)
+  mfa_secret                   String?
+  mfa_temp_secret              String?
+  mfa_confirmed_at             DateTime?                @db.Timestamptz(6)
+  password_reset_tokens        password_reset_tokens[]
+  caja_chica_entregas_autoriza caja_chica_entregas[]    @relation("caja_chica_entregas_autoriza")
+  caja_chica_entregas_cajera   caja_chica_entregas[]    @relation("caja_chica_entregas_cajera")
+  caja_chica_gastos_autoriza   caja_chica_gastos[]      @relation("caja_chica_gastos_autoriza")
+  caja_chica_gastos_cajera     caja_chica_gastos[]      @relation("caja_chica_gastos_cajera")
+  cierres_caja                 cierres_caja[]
+  compras                      compras[]
+  cotizaciones                 cotizaciones[]
+  inventario_movimientos       inventario_movimientos[]
+  roles                        roles                    @relation(fields: [rol_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sucursales                   sucursales?              @relation(fields: [sucursal_id], references: [id], map: "usuarios_sucursal_fk")
+  ventas                       ventas[]
+  reset_day               DateTime? @db.Timestamptz(6)
+  reset_attempts_today    Int       @default(0)
+  reset_emails_sent_today Int       @default(0)
+  reset_last_sent_at      DateTime? @db.Timestamptz(6)
+  reset_lock_until        DateTime? @db.Timestamptz(6)
 
   @@index([sucursal_id])
 }
+
+model password_reset_tokens {
+  id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  user_id    String   @db.Uuid
+  token_hash String   @unique
+  expires_at DateTime @db.Timestamptz(6)
+  used_at    DateTime? @db.Timestamptz(6)
+  ip         String?
+  user_agent String?
+  created_at DateTime @default(now()) @db.Timestamptz(6)
+  user       usuarios @relation(fields: [user_id], references: [id], onDelete: Cascade)
+  @@index([user_id])
+  @@index([expires_at])
+}
+
 
 model ventas {
   id              String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
@@ -342,6 +377,42 @@ model ventas {
   usuarios        usuarios         @relation(fields: [usuario_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
   ventas_detalle  ventas_detalle[]
   ventas_pagos    ventas_pagos[]
+}
+
+model caja_chica_entregas {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fecha             DateTime   @default(now()) @db.Timestamptz(6)
+  sucursal_id       String     @db.Uuid
+  cajera_id         String     @db.Uuid
+  autorizado_por_id String     @db.Uuid
+  monto             Decimal    @default(0) @db.Decimal(12, 2)
+  motivo            String?
+  creado_en         DateTime   @default(now()) @db.Timestamptz(6)
+  autorizado_por    usuarios   @relation("caja_chica_entregas_autoriza", fields: [autorizado_por_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cajera            usuarios   @relation("caja_chica_entregas_cajera", fields: [cajera_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sucursales        sucursales @relation(fields: [sucursal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([fecha])
+  @@index([sucursal_id])
+  @@index([cajera_id])
+}
+
+model caja_chica_gastos {
+  id                String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  fecha             DateTime   @default(now()) @db.Timestamptz(6)
+  sucursal_id       String     @db.Uuid
+  cajera_id         String     @db.Uuid
+  autorizado_por_id String     @db.Uuid
+  monto             Decimal    @default(0) @db.Decimal(12, 2)
+  motivo            String?
+  creado_en         DateTime   @default(now()) @db.Timestamptz(6)
+  autorizado_por    usuarios   @relation("caja_chica_gastos_autoriza", fields: [autorizado_por_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  cajera            usuarios   @relation("caja_chica_gastos_cajera", fields: [cajera_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  sucursales        sucursales @relation(fields: [sucursal_id], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([fecha])
+  @@index([sucursal_id])
+  @@index([cajera_id])
 }
 
 /// This table contains check constraints and requires additional setup for migrations. Visit https://pris.ly/d/check-constraints for more info.

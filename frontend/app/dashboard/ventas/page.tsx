@@ -708,7 +708,9 @@ export default function VentasPage() {
         <header className="border-b border-[#5a1b22] bg-[#2b0a0b]/80 backdrop-blur px-4 md:px-8 py-4 sticky top-0 z-10">
           <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
             <div>
-              <h1 className="text-xl md:text-2xl font-semibold">Ventas</h1>
+              <h1 className="text-xl md:text-2xl font-semibold">
+                Ventas
+              </h1>
               <p className="text-xs md:text-sm text-[#c9b296] capitalize">
                 {today}
               </p>
@@ -748,6 +750,8 @@ export default function VentasPage() {
               </div>
 
               <div className="grid gap-4 md:grid-cols-2">
+
+
                 <button
                   type="button"
                   onClick={() => setVista("masivo")}
@@ -1022,6 +1026,8 @@ export default function VentasPage() {
                               />
                             </td>
 
+                            {/* SKU eliminado */}
+
                             {/* Nombre */}
                             <td className="py-2 px-2 text-[#f8f1e6] min-w-[160px]">
                               <input
@@ -1235,6 +1241,7 @@ export default function VentasPage() {
                     >
                       {importing ? "Procesando..." : "Subir y procesar archivo"}
                     </button>
+
                   </div>
                 </div>
 

@@ -22,6 +22,35 @@ function toNumberSafe(val) {
   return Number.isFinite(n) ? n : 0;
 }
 
+async function updateZeroSinceForProducts(tx, productoIds) {
+  const uniq = Array.from(
+    new Set((productoIds || []).map((x) => String(x || "").trim()).filter(Boolean))
+  );
+  if (uniq.length == 0) return;
+
+  for (const pid of uniq) {
+    const agg = await tx.inventario_existencias.aggregate({
+      where: { producto_id: pid },
+      _sum: { stock: true },
+    });
+
+    const total = toNumberSafe(agg._sum.stock);
+
+    if (total <= 0) {
+      await tx.productos.updateMany({
+        where: { id: pid, zero_since: null },
+        data: { zero_since: new Date() },
+      });
+    } else {
+      await tx.productos.updateMany({
+        where: { id: pid, NOT: { zero_since: null } },
+        data: { zero_since: null },
+      });
+    }
+  }
+}
+
+
 async function resolveSucursalIdForUser(userId) {
   const user = await prisma.usuarios.findUnique({
     where: { id: userId },
@@ -454,6 +483,8 @@ async function createMovement(req, res) {
       },
     });
 
+    await updateZeroSinceForProducts(prisma, [producto_id]);
+
     res.status(201).json({ ok: true, movimiento });
   } catch (err) {
     console.error("POST /inventory/movimientos error", err);
@@ -488,7 +519,10 @@ async function ensureVitrinaForPOS(req, res) {
     }
 
     const result = await prisma.$transaction(async (tx) => {
-      return await ensureVitrinaStockTx(tx, { userId, sucursalId: sucId, items, motivo });
+      const r = await ensureVitrinaStockTx(tx, { userId, sucursalId: sucId, items, motivo });
+      const ids = Array.from(new Set((items || []).map((it) => it.producto_id)));
+      await updateZeroSinceForProducts(tx, ids);
+      return r;
     });
 
     return res.status(201).json({ ok: true, ...result });
@@ -537,12 +571,14 @@ async function transferToVitrina(req, res) {
 
     const result = await prisma.$transaction(async (tx) => {
       // Usa el helper para que sea consistente con POS
-      return await ensureVitrinaStockTx(tx, {
+      const r = await ensureVitrinaStockTx(tx, {
         userId,
         sucursalId: sucId,
         items: [{ producto_id: String(producto_id), cantidad: qty }],
         motivo: motivo || "TRASPASO A VITRINA (manual)",
       });
+      await updateZeroSinceForProducts(tx, [producto_id]);
+      return r;
     });
 
     return res.status(201).json({ ok: true, ...result });
@@ -600,6 +636,13 @@ async function confirmPurchase(req, res) {
     const compraActualizada = await prisma.compras.findUnique({
       where: { id },
     });
+
+    const detalle = await prisma.compras_detalle.findMany({
+      where: { compra_id: id },
+      select: { producto_id: true },
+    });
+    const ids = Array.from(new Set(detalle.map((d) => d.producto_id)));
+    await updateZeroSinceForProducts(prisma, ids);
 
     return res.json({
       ok: true,

@@ -1,7 +1,10 @@
 // src/controllers/sales.controller.js
 const prisma = require("../config/prisma");
+const jwt = require("jsonwebtoken");
 const fs = require("fs");
 const path = require("path");
+
+const JWT_SECRET = process.env.JWT_SECRET || "dev_secret";
 
 // Excel/CSV reader (si no está instalado, el endpoint te lo dirá con mensaje claro)
 let XLSX = null;
@@ -365,10 +368,12 @@ async function createSale(req, res) {
       }
 
       await tx.$executeRawUnsafe(`SELECT fn_confirmar_venta($1::uuid);`, venta.id);
+      await updateZeroSinceForProducts(tx, items.map((it) => it.producto_id));
 
       return venta;
     });
 
+    notifySummarySubscribers().catch(() => {});
     return res.status(201).json({ ok: true, venta: ventaCreada });
   } catch (err) {
     console.error("POST /sales error", err);
@@ -422,6 +427,260 @@ async function resolveSucursalIdForUser(userId) {
   return sp?.id ?? null;
 }
 
+async function recordCambioCajaChica(tx, { sucursalId, cajeraId, cambio, venta, itemsCount, totalVenta }) {
+  const monto = Number(cambio || 0);
+  if (!Number.isFinite(monto) || monto <= 0) return;
+
+  const refBase = venta?.folio ? `Cambio venta #${venta.folio}` : `Cambio venta ${venta?.id || ""}`;
+  const itemsLabel =
+    Number.isFinite(itemsCount) && itemsCount > 0 ? ` · ${itemsCount} items` : "";
+  const totalLabel =
+    Number.isFinite(totalVenta) && totalVenta > 0
+      ? ` · Total Q ${Number(totalVenta).toFixed(2)}`
+      : "";
+  const ref = `${refBase}${itemsLabel}${totalLabel}`;
+
+  await tx.caja_chica_gastos.create({
+    data: {
+      sucursal_id: sucursalId,
+      cajera_id: cajeraId,
+      autorizado_por_id: cajeraId,
+      monto,
+      motivo: ref.trim(),
+    },
+  });
+}
+
+/* =========================================================
+ *  ✅ AUTO-CIERRE DE CAJA (POS)
+ *  - Cierra caja si:
+ *      a) cambio de día (hora Guatemala)
+ *      b) pasó 23:50 (hora Guatemala)
+ *  - Si cerró: bloquea venta para no mezclar días.
+ * =======================================================*/
+
+const BUSINESS_TZ = process.env.BUSINESS_TZ || "America/Guatemala";
+const AUTO_CLOSE_AT = { hour: 23, minute: 50 };
+
+function tzParts(date, tz = BUSINESS_TZ) {
+  try {
+    const fmt = new Intl.DateTimeFormat("en-CA", {
+      timeZone: tz,
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+
+    const parts = fmt.formatToParts(date);
+    const map = {};
+    for (const p of parts) if (p.type !== "literal") map[p.type] = p.value;
+
+    return {
+      year: Number(map.year),
+      month: Number(map.month),
+      day: Number(map.day),
+      hour: Number(map.hour),
+      minute: Number(map.minute),
+      second: Number(map.second),
+    };
+  } catch (_) {
+    // fallback: TZ del server (no ideal, pero no revienta)
+    return {
+      year: date.getFullYear(),
+      month: date.getMonth() + 1,
+      day: date.getDate(),
+      hour: date.getHours(),
+      minute: date.getMinutes(),
+      second: date.getSeconds(),
+    };
+  }
+}
+
+function tzYMD(date, tz = BUSINESS_TZ) {
+  const p = tzParts(date, tz);
+  return `${p.year}-${String(p.month).padStart(2, "0")}-${String(p.day).padStart(2, "0")}`;
+}
+
+function tzOffsetMinutes(date, tz = BUSINESS_TZ) {
+  const p = tzParts(date, tz);
+  const asUTC = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, p.second);
+  return Math.round((asUTC - date.getTime()) / 60000);
+}
+
+function makeDateInTz(y, m, d, hh, mm, ss, tz = BUSINESS_TZ) {
+  let guess = new Date(Date.UTC(y, m - 1, d, hh, mm, ss));
+  for (let i = 0; i < 2; i++) {
+    const off = tzOffsetMinutes(guess, tz);
+    guess = new Date(Date.UTC(y, m - 1, d, hh, mm, ss) - off * 60000);
+  }
+  return guess;
+}
+
+function shouldAutoCloseCaja(cierreAbierto, tz = BUSINESS_TZ) {
+  if (!cierreAbierto) return { should: false, reason: null, endTs: null };
+
+  const now = new Date();
+
+  const nowY = tzYMD(now, tz);
+  const startDate = cierreAbierto.fecha_inicio ? new Date(cierreAbierto.fecha_inicio) : null;
+  const openY = startDate ? tzYMD(startDate, tz) : nowY;
+
+  // ✅ Si ya es otro día en GT, cerrar a medianoche del día actual (00:00:00 GT)
+  if (openY !== nowY) {
+    const pNow = tzParts(now, tz);
+    const startOfToday = makeDateInTz(pNow.year, pNow.month, pNow.day, 0, 0, 0, tz);
+    return { should: true, reason: "DAY_CHANGE", endTs: startOfToday };
+  }
+
+  // ✅ Si ya pasó 23:50 GT, cerrar exactamente a las 23:50:00 GT del día actual
+  const pNow = tzParts(now, tz);
+  const mins = pNow.hour * 60 + pNow.minute;
+  const threshold = AUTO_CLOSE_AT.hour * 60 + AUTO_CLOSE_AT.minute;
+
+  if (mins >= threshold) {
+    const cut = makeDateInTz(pNow.year, pNow.month, pNow.day, AUTO_CLOSE_AT.hour, AUTO_CLOSE_AT.minute, 0, tz);
+    return { should: true, reason: "CUTOFF_2350", endTs: cut };
+  }
+
+  return { should: false, reason: null, endTs: null };
+}
+
+function toNumberSafeMoney(val) {
+  if (val === null || val === undefined) return 0;
+  const n = Number(val);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function findCajaAbiertaPOS(userId, sucursalId) {
+  try {
+    const rows = await prisma.$queryRaw`
+      SELECT *
+      FROM public.cierres_caja
+      WHERE usuario_id = ${userId}::uuid
+        AND sucursal_id = ${sucursalId}::uuid
+        AND cerrado_at IS NULL
+      ORDER BY fecha_inicio DESC
+      LIMIT 1;
+    `;
+    return rows?.[0] || null;
+  } catch (e) {
+    // fallback si no existe cerrado_at
+    const cierre = await prisma.cierres_caja.findFirst({
+      where: {
+        usuario_id: userId,
+        sucursal_id: sucursalId,
+        fecha_fin: null,
+      },
+      orderBy: { fecha_inicio: "desc" },
+    });
+    return cierre || null;
+  }
+}
+
+async function markCajaCerradaPOS(tx, cierreId) {
+  try {
+    await tx.$executeRaw`
+      UPDATE public.cierres_caja
+      SET cerrado_at = now()
+      WHERE id = ${cierreId}::uuid;
+    `;
+  } catch (_) {
+    // compatibilidad si no existe la columna
+  }
+}
+
+async function getTotalesPagosPOS(tx, sucursalId, userId, startTs, endTs) {
+  const rows = await tx.$queryRaw`
+    SELECT
+      COALESCE(SUM(CASE WHEN vp.metodo = 'EFECTIVO' THEN vp.monto ELSE 0 END), 0) AS efectivo,
+      COALESCE(SUM(CASE WHEN vp.metodo = 'TRANSFERENCIA' THEN vp.monto ELSE 0 END), 0) AS transferencia,
+      COALESCE(SUM(CASE WHEN vp.metodo = 'TARJETA' THEN vp.monto ELSE 0 END), 0) AS tarjeta
+    FROM ventas v
+    JOIN ventas_pagos vp ON vp.venta_id = v.id
+    WHERE v.sucursal_id = ${sucursalId}::uuid
+      AND v.usuario_id  = ${userId}::uuid
+      AND v.estado = 'CONFIRMADA'
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) >= ${startTs}::timestamptz
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) < ${endTs}::timestamptz;
+  `;
+
+  const r = rows?.[0] || {};
+  return {
+    efectivo: toNumberSafeMoney(r.efectivo),
+    transferencia: toNumberSafeMoney(r.transferencia),
+    tarjeta: toNumberSafeMoney(r.tarjeta),
+  };
+}
+
+async function closeCajaAutomaticoPOS(userId, sucursalId, cierreAbierto, endTs) {
+  const startTs = cierreAbierto.fecha_inicio ? new Date(cierreAbierto.fecha_inicio) : new Date();
+  let end = endTs instanceof Date ? endTs : new Date(endTs || new Date());
+
+  // defensivo: si alguien abrió caja después del corte, no hacemos rangos negativos
+  if (end.getTime() < startTs.getTime()) {
+    end = new Date(startTs);
+  }
+
+  const actualizado = await prisma.$transaction(async (tx) => {
+    const totals = await getTotalesPagosPOS(tx, sucursalId, userId, startTs, end);
+
+    const efectivo = Number((totals.efectivo || 0).toFixed(2));
+    const transferencia = Number((totals.transferencia || 0).toFixed(2));
+    const tarjeta = Number((totals.tarjeta || 0).toFixed(2));
+    const totalGeneral = Number((efectivo + transferencia + tarjeta).toFixed(2));
+
+    const cierreUpdate = await tx.cierres_caja.update({
+      where: { id: cierreAbierto.id },
+      data: {
+        fecha_fin: end,
+
+        total_efectivo: efectivo,
+        total_transferencia: transferencia,
+        total_tarjeta: tarjeta,
+        total_general: totalGeneral,
+
+        // auto-cierre: no hay contado
+        monto_cierre_reportado: null,
+        diferencia: null,
+      },
+    });
+
+    await markCajaCerradaPOS(tx, cierreAbierto.id);
+
+    return cierreUpdate;
+  });
+
+  return actualizado;
+}
+
+async function autoCloseCajaIfNeededPOS(userId, sucursalId) {
+  const abierta = await findCajaAbiertaPOS(userId, sucursalId);
+  if (!abierta) return { status: "NO_OPEN", closed: false, reason: null, cierre: null };
+
+  // defensivo: si ya trae fecha_fin, no la tratamos como abierta
+  if (abierta.fecha_fin) return { status: "NO_OPEN", closed: false, reason: null, cierre: null };
+
+  const d = shouldAutoCloseCaja(abierta, BUSINESS_TZ);
+  if (!d.should) {
+    return { status: "OPEN", closed: false, reason: null, cierre: abierta };
+  }
+
+  const cierreCerrado = await closeCajaAutomaticoPOS(userId, sucursalId, abierta, d.endTs);
+  return { status: "CLOSED", closed: true, reason: d.reason, cierre: cierreCerrado };
+}
+
 /* =========================
  *  ✅ HELPERS STOCK POS
  * =======================*/
@@ -439,6 +698,35 @@ function toNumberSafe(val) {
   const n = Number(val);
   return Number.isFinite(n) ? n : 0;
 }
+
+async function updateZeroSinceForProducts(tx, productoIds) {
+  const uniq = Array.from(
+    new Set((productoIds || []).map((x) => String(x || "").trim()).filter(Boolean))
+  );
+  if (uniq.length === 0) return;
+
+  for (const pid of uniq) {
+    const agg = await tx.inventario_existencias.aggregate({
+      where: { producto_id: pid },
+      _sum: { stock: true },
+    });
+
+    const total = toNumberSafe(agg._sum.stock);
+
+    if (total <= 0) {
+      await tx.productos.updateMany({
+        where: { id: pid, zero_since: null },
+        data: { zero_since: new Date() },
+      });
+    } else {
+      await tx.productos.updateMany({
+        where: { id: pid, NOT: { zero_since: null } },
+        data: { zero_since: null },
+      });
+    }
+  }
+}
+
 
 /**
  * Busca las ubicaciones VITRINA y BODEGA de una sucursal
@@ -668,6 +956,36 @@ async function crearVentaPOS(req, res) {
       });
     }
 
+    // =======================================================
+    // ✅ NUEVO: Auto-cierre de caja (23:50 GT o cambio de día GT)
+    // - Si NO hay caja abierta: bloquea venta (para mantener el día cuadrado)
+    // - Si se autocerró: bloquea venta y exige aperturar caja.
+    // =======================================================
+    const cajaCheck = await autoCloseCajaIfNeededPOS(usuarioId, sucursalId);
+
+    if (cajaCheck.status === "NO_OPEN") {
+      return res.status(400).json({
+        ok: false,
+        code: "CAJA_NO_ABIERTA",
+        message: "Debes aperturar la caja antes de vender.",
+      });
+    }
+
+    if (cajaCheck.status === "CLOSED") {
+      return res.status(409).json({
+        ok: false,
+        code: "CAJA_AUTOCERRADA",
+        reason: cajaCheck.reason, // DAY_CHANGE | CUTOFF_2350
+        message:
+          cajaCheck.reason === "DAY_CHANGE"
+            ? "La caja anterior se cerró automáticamente por cambio de día (hora Guatemala). Abre caja para continuar."
+            : "Se alcanzó el corte de cierre (23:50, hora Guatemala). La caja se cerró automáticamente. Abre caja para continuar.",
+        cierre: cajaCheck.cierre
+          ? { id: cajaCheck.cierre.id, fecha_fin: cajaCheck.cierre.fecha_fin }
+          : null,
+      });
+    }
+
     // Normaliza items: soporta qty o cantidad
     const cleanItems = items.map((x) => ({
       producto_id: String(x.producto_id),
@@ -684,6 +1002,7 @@ async function crearVentaPOS(req, res) {
         id: true,
         nombre: true,
         precio_venta: true,
+        precio_mayorista: true,
         activo: true,
         archivado: true,
       },
@@ -692,12 +1011,19 @@ async function crearVentaPOS(req, res) {
     const mapProd = new Map(productos.map((p) => [String(p.id), p]));
 
     // Validaciones + precio unitario fallback a precio_venta
+    const totalQty = cleanItems.reduce((acc, it) => acc + (Number(it.cantidad) || 0), 0);
+    const wholesaleApplies = totalQty >= 6;
+
     for (const it of cleanItems) {
       const p = mapProd.get(it.producto_id);
       if (!p) return res.status(404).json({ ok: false, message: "Producto no encontrado" });
 
       if (p.archivado || !p.activo) {
         return res.status(400).json({ ok: false, message: `Producto no disponible: ${p.nombre}` });
+      }
+
+      if (wholesaleApplies && p.precio_mayorista != null && Number(p.precio_mayorista) > 0) {
+        it.precio_unitario = Number(p.precio_mayorista);
       }
 
       if (Number.isNaN(it.precio_unitario) || it.precio_unitario <= 0) {
@@ -784,10 +1110,27 @@ async function crearVentaPOS(req, res) {
 
       // 4) Confirmar (descuenta stock con tu lógica)
       await tx.$executeRawUnsafe(`SELECT fn_confirmar_venta($1::uuid);`, venta.id);
+      await updateZeroSinceForProducts(tx, cleanItems.map((it) => it.producto_id));
+
+      if (metodo === "EFECTIVO" && cambio && Number(cambio) > 0) {
+        const itemsCount = cleanItems.reduce(
+          (sum, it) => sum + Number(it.cantidad || 0),
+          0
+        );
+        await recordCambioCajaChica(tx, {
+          sucursalId,
+          cajeraId: usuarioId,
+          cambio,
+          venta,
+          itemsCount,
+          totalVenta: total,
+        });
+      }
 
       return venta;
     });
 
+    notifySummarySubscribers().catch(() => {});
     return res.status(201).json({
       ok: true,
       venta_id: ventaCreada.id,
@@ -1427,6 +1770,573 @@ async function importSalesExcel(req, res) {
   }
 }
 
+/* =========================================================
+ *  ✅ NUEVO: RESUMEN DEL DÍA (Mini Dashboard)
+ *  - Totales por método (EFECTIVO / TRANSFERENCIA / TARJETA)
+ *  - # ventas confirmadas
+ *  - Producto más vendido (por cantidad)
+ *  - Categoría más vendida (por cantidad)
+ *  - Top 5 productos
+ *
+ *  🔥 “Tiempo real”: el frontend hace polling a este endpoint.
+ *  ✅ Consistente con caja: si ya pasaron las 23:50 (GT), “corta” en 23:50.
+ * =======================================================*/
+
+function getSummaryRangeInTzNow(tz = BUSINESS_TZ) {
+  const now = new Date();
+  const p = tzParts(now, tz);
+
+  const start = makeDateInTz(p.year, p.month, p.day, 0, 0, 0, tz);
+  const cutoff = makeDateInTz(p.year, p.month, p.day, AUTO_CLOSE_AT.hour, AUTO_CLOSE_AT.minute, 0, tz);
+
+  // Si ya pasó el corte, congelamos el resumen en el corte (para cuadrar con cierre de caja)
+  const end = now.getTime() >= cutoff.getTime() ? cutoff : now;
+
+  return { start, end, cutoff };
+}
+
+function parseYmd(dateStr) {
+  if (!dateStr) return null;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(String(dateStr).trim());
+  if (!m) return null;
+  const y = Number(m[1]);
+  const mo = Number(m[2]);
+  const d = Number(m[3]);
+  if (!Number.isFinite(y) || !Number.isFinite(mo) || !Number.isFinite(d)) return null;
+  return { y, mo, d, ymd: `${m[1]}-${m[2]}-${m[3]}` };
+}
+
+function getSummaryRangeForDate(dateStr, tz = BUSINESS_TZ) {
+  if (!dateStr) return getSummaryRangeInTzNow(tz);
+
+  const parsed = parseYmd(dateStr);
+  if (!parsed) return null;
+
+  const { y, mo, d, ymd } = parsed;
+  const start = makeDateInTz(y, mo, d, 0, 0, 0, tz);
+  const cutoff = makeDateInTz(y, mo, d, AUTO_CLOSE_AT.hour, AUTO_CLOSE_AT.minute, 0, tz);
+
+  const now = new Date();
+  const todayYmd = tzYMD(now, tz);
+
+  const end = ymd === todayYmd && now.getTime() < cutoff.getTime() ? now : cutoff;
+  return { start, end, cutoff, ymd };
+}
+
+function money2(n) {
+  const x = Number(n || 0);
+  return Number.isFinite(x) ? Number(x.toFixed(2)) : 0;
+}
+
+async function getTotalesPagosSummary(tx, { sucursalId, userIdOrNull, startTs, endTs }) {
+  if (userIdOrNull) {
+    const rows = await tx.$queryRaw`
+      SELECT
+        COALESCE(SUM(CASE WHEN vp.metodo = 'EFECTIVO' THEN vp.monto ELSE 0 END), 0) AS efectivo,
+        COALESCE(SUM(CASE WHEN vp.metodo = 'TRANSFERENCIA' THEN vp.monto ELSE 0 END), 0) AS transferencia,
+        COALESCE(SUM(CASE WHEN vp.metodo = 'TARJETA' THEN vp.monto ELSE 0 END), 0) AS tarjeta
+      FROM ventas v
+      JOIN ventas_pagos vp ON vp.venta_id = v.id
+      WHERE v.sucursal_id = ${sucursalId}::uuid
+        AND v.usuario_id  = ${userIdOrNull}::uuid
+        AND v.estado = 'CONFIRMADA'
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) >= ${startTs}::timestamptz
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) < ${endTs}::timestamptz;
+    `;
+    return rows?.[0] || {};
+  }
+
+  const rows = await tx.$queryRaw`
+    SELECT
+      COALESCE(SUM(CASE WHEN vp.metodo = 'EFECTIVO' THEN vp.monto ELSE 0 END), 0) AS efectivo,
+      COALESCE(SUM(CASE WHEN vp.metodo = 'TRANSFERENCIA' THEN vp.monto ELSE 0 END), 0) AS transferencia,
+      COALESCE(SUM(CASE WHEN vp.metodo = 'TARJETA' THEN vp.monto ELSE 0 END), 0) AS tarjeta
+    FROM ventas v
+    JOIN ventas_pagos vp ON vp.venta_id = v.id
+    WHERE v.sucursal_id = ${sucursalId}::uuid
+      AND v.estado = 'CONFIRMADA'
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) >= ${startTs}::timestamptz
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) < ${endTs}::timestamptz;
+  `;
+  return rows?.[0] || {};
+}
+
+async function getVentasCountSummary(tx, { sucursalId, userIdOrNull, startTs, endTs }) {
+  if (userIdOrNull) {
+    const rows = await tx.$queryRaw`
+      SELECT COALESCE(COUNT(*),0)::int AS n
+      FROM ventas v
+      WHERE v.sucursal_id = ${sucursalId}::uuid
+        AND v.usuario_id  = ${userIdOrNull}::uuid
+        AND v.estado = 'CONFIRMADA'
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) >= ${startTs}::timestamptz
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) < ${endTs}::timestamptz;
+    `;
+    return Number(rows?.[0]?.n || 0);
+  }
+
+  const rows = await tx.$queryRaw`
+    SELECT COALESCE(COUNT(*),0)::int AS n
+    FROM ventas v
+    WHERE v.sucursal_id = ${sucursalId}::uuid
+      AND v.estado = 'CONFIRMADA'
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) >= ${startTs}::timestamptz
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) < ${endTs}::timestamptz;
+  `;
+  return Number(rows?.[0]?.n || 0);
+}
+
+async function getTopProductoSummary(tx, { sucursalId, userIdOrNull, startTs, endTs, limit = 1 }) {
+  if (userIdOrNull) {
+    return await tx.$queryRaw`
+      SELECT
+        p.id AS producto_id,
+        p.nombre,
+        p.sku,
+        COALESCE(SUM(d.cantidad),0)::int AS qty,
+        COALESCE(SUM(d.total_linea),0)::numeric AS total
+      FROM ventas v
+      JOIN ventas_detalle d ON d.venta_id = v.id
+      JOIN productos p ON p.id = d.producto_id
+      WHERE v.sucursal_id = ${sucursalId}::uuid
+        AND v.usuario_id  = ${userIdOrNull}::uuid
+        AND v.estado = 'CONFIRMADA'
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) >= ${startTs}::timestamptz
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) < ${endTs}::timestamptz
+      GROUP BY p.id, p.nombre, p.sku
+      ORDER BY COALESCE(SUM(d.cantidad),0) DESC, COALESCE(SUM(d.total_linea),0) DESC
+      LIMIT ${Number(limit)};
+    `;
+  }
+
+  return await tx.$queryRaw`
+    SELECT
+      p.id AS producto_id,
+      p.nombre,
+      p.sku,
+      COALESCE(SUM(d.cantidad),0)::int AS qty,
+      COALESCE(SUM(d.total_linea),0)::numeric AS total
+    FROM ventas v
+    JOIN ventas_detalle d ON d.venta_id = v.id
+    JOIN productos p ON p.id = d.producto_id
+    WHERE v.sucursal_id = ${sucursalId}::uuid
+      AND v.estado = 'CONFIRMADA'
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) >= ${startTs}::timestamptz
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) < ${endTs}::timestamptz
+    GROUP BY p.id, p.nombre, p.sku
+    ORDER BY COALESCE(SUM(d.cantidad),0) DESC, COALESCE(SUM(d.total_linea),0) DESC
+    LIMIT ${Number(limit)};
+  `;
+}
+
+async function getTopCategoriaSummary(tx, { sucursalId, userIdOrNull, startTs, endTs }) {
+  // Elegimos 1 categoría por producto (MIN(nombre)) para evitar duplicados si algún producto tiene múltiples categorías
+  if (userIdOrNull) {
+    return await tx.$queryRaw`
+      WITH prod_cat AS (
+        SELECT pc.producto_id, MIN(c.nombre) AS categoria
+        FROM productos_categorias pc
+        JOIN categorias c ON c.id = pc.categoria_id
+        GROUP BY pc.producto_id
+      )
+      SELECT
+        COALESCE(pc.categoria, 'Sin categoría') AS categoria,
+        COALESCE(SUM(d.cantidad),0)::int AS qty,
+        COALESCE(SUM(d.total_linea),0)::numeric AS total
+      FROM ventas v
+      JOIN ventas_detalle d ON d.venta_id = v.id
+      JOIN productos p ON p.id = d.producto_id
+      LEFT JOIN prod_cat pc ON pc.producto_id = p.id
+      WHERE v.sucursal_id = ${sucursalId}::uuid
+        AND v.usuario_id  = ${userIdOrNull}::uuid
+        AND v.estado = 'CONFIRMADA'
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) >= ${startTs}::timestamptz
+        AND COALESCE(
+          NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+          NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+        ) < ${endTs}::timestamptz
+      GROUP BY 1
+      ORDER BY COALESCE(SUM(d.cantidad),0) DESC, COALESCE(SUM(d.total_linea),0) DESC
+      LIMIT 1;
+    `;
+  }
+
+  return await tx.$queryRaw`
+    WITH prod_cat AS (
+      SELECT pc.producto_id, MIN(c.nombre) AS categoria
+      FROM productos_categorias pc
+      JOIN categorias c ON c.id = pc.categoria_id
+      GROUP BY pc.producto_id
+    )
+    SELECT
+      COALESCE(pc.categoria, 'Sin categoría') AS categoria,
+      COALESCE(SUM(d.cantidad),0)::int AS qty,
+      COALESCE(SUM(d.total_linea),0)::numeric AS total
+    FROM ventas v
+    JOIN ventas_detalle d ON d.venta_id = v.id
+    JOIN productos p ON p.id = d.producto_id
+    LEFT JOIN prod_cat pc ON pc.producto_id = p.id
+    WHERE v.sucursal_id = ${sucursalId}::uuid
+      AND v.estado = 'CONFIRMADA'
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) >= ${startTs}::timestamptz
+      AND COALESCE(
+        NULLIF(to_jsonb(v)->>'creado_en','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'fecha','')::timestamptz,
+        NULLIF(to_jsonb(v)->>'created_at','')::timestamptz
+      ) < ${endTs}::timestamptz
+    GROUP BY 1
+    ORDER BY COALESCE(SUM(d.cantidad),0) DESC, COALESCE(SUM(d.total_linea),0) DESC
+    LIMIT 1;
+  `;
+}
+
+async function buildSummaryData({
+  usuarioId,
+  roleNorm,
+  scope,
+  sucursalId,
+  dateStr,
+}) {
+  if (!usuarioId) {
+    const e = new Error("No autenticado");
+    e.statusCode = 401;
+    throw e;
+  }
+
+  if (!sucursalId) {
+    const e = new Error("sucursal_id es requerido (asigna usuarios.sucursal_id o crea SP).");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const userIdOrNull =
+    roleNorm === "ADMIN" && String(scope || "").toUpperCase() === "SUCURSAL"
+      ? null
+      : usuarioId;
+
+  const range = getSummaryRangeForDate(dateStr, BUSINESS_TZ);
+  if (!range) {
+    const e = new Error("date invalida. Formato esperado: YYYY-MM-DD");
+    e.statusCode = 400;
+    throw e;
+  }
+
+  const { start, end, cutoff, ymd } = range;
+
+  const data = await prisma.$transaction(async (tx) => {
+    const pagos = await getTotalesPagosSummary(tx, {
+      sucursalId,
+      userIdOrNull,
+      startTs: start,
+      endTs: end,
+    });
+
+    const efectivo = money2(pagos.efectivo);
+    const transferencia = money2(pagos.transferencia);
+    const tarjeta = money2(pagos.tarjeta);
+    const totalGeneral = money2(efectivo + transferencia + tarjeta);
+
+    const numVentas = await getVentasCountSummary(tx, {
+      sucursalId,
+      userIdOrNull,
+      startTs: start,
+      endTs: end,
+    });
+
+    const top1 = await getTopProductoSummary(tx, {
+      sucursalId,
+      userIdOrNull,
+      startTs: start,
+      endTs: end,
+      limit: 1,
+    });
+
+    const top5 = await getTopProductoSummary(tx, {
+      sucursalId,
+      userIdOrNull,
+      startTs: start,
+      endTs: end,
+      limit: 5,
+    });
+
+    const topCat = await getTopCategoriaSummary(tx, {
+      sucursalId,
+      userIdOrNull,
+      startTs: start,
+      endTs: end,
+    });
+
+    const topProductoRow = Array.isArray(top1) ? top1[0] : null;
+    const topCatRow = Array.isArray(topCat) ? topCat[0] : null;
+
+    return {
+      date: ymd || tzYMD(new Date(), BUSINESS_TZ),
+      timezone: BUSINESS_TZ,
+      range: {
+        start: start.toISOString(),
+        end: end.toISOString(),
+        cutoff: cutoff.toISOString(),
+        cutoff_applied: end.getTime() === cutoff.getTime(),
+      },
+      scope: userIdOrNull ? "USER" : "SUCURSAL",
+      totals: {
+        total_general: totalGeneral,
+        efectivo,
+        transferencia,
+        tarjeta,
+        num_ventas: Number(numVentas || 0),
+      },
+      top: {
+        producto: topProductoRow
+          ? {
+              producto_id: String(topProductoRow.producto_id),
+              nombre: String(topProductoRow.nombre || ""),
+              sku: String(topProductoRow.sku || ""),
+              qty: Number(topProductoRow.qty || 0),
+              total: money2(topProductoRow.total),
+            }
+          : null,
+        categoria: topCatRow
+          ? {
+              categoria: String(topCatRow.categoria || "Sin categoria"),
+              qty: Number(topCatRow.qty || 0),
+              total: money2(topCatRow.total),
+            }
+          : null,
+      },
+      top_productos: Array.isArray(top5)
+        ? top5.map((r) => ({
+            producto_id: String(r.producto_id),
+            nombre: String(r.nombre || ""),
+            sku: String(r.sku || ""),
+            qty: Number(r.qty || 0),
+            total: money2(r.total),
+          }))
+        : [],
+      updated_at: new Date().toISOString(),
+    };
+  });
+
+  return data;
+}
+
+const summarySseClients = new Map();
+
+function sseWrite(res, event, payload) {
+  res.write(`event: ${event}\n`);
+  res.write(`data: ${JSON.stringify(payload)}\n\n`);
+}
+
+async function sendSummaryToClient(client) {
+  const data = await buildSummaryData({
+    usuarioId: client.usuarioId,
+    roleNorm: client.roleNorm,
+    scope: client.scope,
+    sucursalId: client.sucursalId,
+    dateStr: client.dateStr,
+  });
+  sseWrite(client.res, "summary", { ok: true, data });
+}
+
+async function notifySummarySubscribers() {
+  const entries = Array.from(summarySseClients.entries());
+  await Promise.all(
+    entries.map(async ([id, client]) => {
+      if (!client || !client.res || client.res.writableEnded) {
+        summarySseClients.delete(id);
+        return;
+      }
+      try {
+        await sendSummaryToClient(client);
+      } catch (e) {
+        sseWrite(client.res, "error", { ok: false, message: e?.message || "Error SSE" });
+      }
+    })
+  );
+}
+
+/**
+ * ✅ GET resumen del día
+ * Query opcional:
+ *  - scope=USER | SUCURSAL
+ *    * USER (default): resumen solo de la cajera (usuario actual)
+ *    * SUCURSAL: resumen de TODA la sucursal (solo admin)
+ */
+async function resumenVentasHoy(req, res) {
+  try {
+    const usuarioId = req.user?.userId;
+    if (!usuarioId) {
+      return res.status(401).json({ ok: false, message: "No autenticado" });
+    }
+
+    const roleNorm = String(req.user?.roleName ?? "").trim().toUpperCase();
+    const scope = String(req.query?.scope ?? "USER").trim().toUpperCase();
+
+    // sucursal por usuario (fallback SP)
+    let sucursalId = await resolveSucursalIdForUser(usuarioId);
+
+    // Admin puede forzar sucursal
+    if (roleNorm === "ADMIN" && req.query?.sucursal_id) {
+      sucursalId = String(req.query.sucursal_id);
+    }
+
+    if (!sucursalId) {
+      return res.status(400).json({
+        ok: false,
+        message: "sucursal_id es requerido (asigna usuarios.sucursal_id o crea SP).",
+      });
+    }
+
+    const dateStr = req.query?.date ? String(req.query.date) : null;
+    const data = await buildSummaryData({
+      usuarioId,
+      roleNorm,
+      scope,
+      sucursalId,
+      dateStr,
+    });
+
+    res.setHeader("Cache-Control", "no-store");
+    return res.json({ ok: true, data });
+  } catch (err) {
+    console.error("Error resumenVentasHoy:", err);
+    return res.status(500).json({ ok: false, message: "Error generando resumen del día" });
+  }
+}
+
+async function resumenVentasStream(req, res) {
+  try {
+    const header = req.headers?.authorization || "";
+    const headerToken = header.startsWith("Bearer ") ? header.split(" ")[1] : null;
+    const token = String(req.query?.token || headerToken || "").trim();
+
+    if (!token) {
+      return res.status(401).json({ ok: false, message: "Token requerido" });
+    }
+
+    let payload = null;
+    try {
+      payload = jwt.verify(token, JWT_SECRET);
+    } catch (err) {
+      return res.status(401).json({ ok: false, message: "Token invalido" });
+    }
+
+    const usuarioId = payload?.userId;
+    const roleNorm = String(payload?.roleName ?? "").trim().toUpperCase();
+    const scope = String(req.query?.scope ?? "USER").trim().toUpperCase();
+
+    let sucursalId = await resolveSucursalIdForUser(usuarioId);
+    if (roleNorm === "ADMIN" && req.query?.sucursal_id) {
+      sucursalId = String(req.query.sucursal_id);
+    }
+
+    if (!sucursalId) {
+      return res.status(400).json({
+        ok: false,
+        message: "sucursal_id es requerido (asigna usuarios.sucursal_id o crea SP).",
+      });
+    }
+
+    const dateStr = req.query?.date ? String(req.query.date) : null;
+
+    res.setHeader("Content-Type", "text/event-stream");
+    res.setHeader("Cache-Control", "no-store");
+    res.setHeader("Connection", "keep-alive");
+    res.flushHeaders?.();
+
+    const clientId = `${Date.now()}_${Math.random().toString(36).slice(2)}`;
+    const client = {
+      res,
+      usuarioId,
+      roleNorm,
+      scope,
+      sucursalId,
+      dateStr,
+    };
+    summarySseClients.set(clientId, client);
+
+    try {
+      await sendSummaryToClient(client);
+    } catch (e) {
+      sseWrite(res, "error", { ok: false, message: e?.message || "Error SSE" });
+      summarySseClients.delete(clientId);
+      return res.end();
+    }
+
+    const keepAlive = setInterval(() => {
+      if (res.writableEnded) return;
+      res.write(": ping\n\n");
+    }, 25000);
+
+    req.on("close", () => {
+      clearInterval(keepAlive);
+      summarySseClients.delete(clientId);
+    });
+  } catch (err) {
+    console.error("Error resumenVentasStream:", err);
+    try {
+      res.status(500).json({ ok: false, message: "Error stream resumen" });
+    } catch {}
+  }
+}
+
 module.exports = {
   createSale,
   crearVentaPOS, // ✅ POS ahora hace auto-traspaso BODEGA->VITRINA si falta stock
@@ -1434,4 +2344,9 @@ module.exports = {
   deleteManualProduct,
   bulkUpdateProducts,
   importSalesExcel,
+
+  // ✅ NUEVO
+  resumenVentasHoy,
+  resumenVentasStream,
+  buildSummaryData,
 };

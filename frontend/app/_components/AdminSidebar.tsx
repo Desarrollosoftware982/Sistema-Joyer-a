@@ -10,9 +10,15 @@ interface User {
   rol: string;
 }
 
+/**
+ * ✅ A + B:
+ * - user y onLogout opcionales (no rompe pantallas que sí los envían).
+ * - Si faltan, leemos user desde localStorage ("joyeria_user").
+ * - Logout fallback limpia token/user y manda a /login.
+ */
 interface AdminSidebarProps {
-  user: User;
-  onLogout: () => void;
+  user?: User | null;
+  onLogout?: () => void;
 }
 
 export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
@@ -21,8 +27,45 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
   const [collapsed, setCollapsed] = useState(false); // sólo escritorio
   const [mobileOpen, setMobileOpen] = useState(false); // sólo móvil
 
+  // ✅ B: Auto-user desde localStorage si no viene por props
+  const safeUser: User = useMemo(() => {
+    if (user?.id) return user;
+
+    if (typeof window !== "undefined") {
+      const raw = localStorage.getItem("joyeria_user");
+      if (raw) {
+        try {
+          const u: any = JSON.parse(raw);
+
+          return {
+            id: String(u?.id ?? ""),
+            nombre: String(u?.nombre ?? "Usuario"),
+            email: String(u?.email ?? ""),
+            // soporta varias llaves por si alguna pantalla guardó distinto
+            rol: String(u?.rol ?? u?.roleName ?? u?.role ?? u?.rolNombre ?? ""),
+          };
+        } catch {
+          // si está corrupto, caemos al fallback
+        }
+      }
+    }
+
+    return { id: "", nombre: "Usuario", email: "", rol: "" };
+  }, [user]);
+
+  // ✅ B: Logout fallback consistente con Bearer/localStorage
+  const safeLogout =
+    onLogout ??
+    (() => {
+      try {
+        localStorage.removeItem("joyeria_token");
+        localStorage.removeItem("joyeria_user");
+      } catch {}
+      router.push("/login");
+    });
+
   // ✅ Normalizar rol
-  const rolNorm = String(user?.rol || "").trim().toUpperCase();
+  const rolNorm = String(safeUser?.rol || "").trim().toUpperCase();
   const isAdmin = rolNorm === "ADMIN";
   const isCajero = rolNorm === "CAJERO";
 
@@ -30,20 +73,21 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
   const mainNav = useMemo(() => {
     if (isCajero) {
       return [
-        // ✅ Ahora el “home” real del cajero es /caja (Apertura -> POS)
         { label: "Caja (Apertura / POS)", path: "/caja" },
         { label: "Resumen", path: "/caja/resumen" },
-        { label: "Ventas", path: "/caja/ventas" },
+        { label: "Reportes de Ventas", path: "/caja/reportes" },
+        { label: "Cotizaciones", path: "/caja/cotizaciones" },
+        { label: "Caja chica", path: "/caja/caja-chica" },
       ];
     }
 
-    // ADMIN (y si algún rol raro cae aquí, por seguridad lo tratamos como admin-menu)
     return [
       { label: "Dashboard", path: "/dashboard" },
-      { label: "POS — Caja", path: "/dashboard/pos" },
+      { label: "POS - Caja", path: "/dashboard/pos" },
       { label: "Ventas", path: "/dashboard/ventas" },
       { label: "Inventario", path: "/dashboard/inventario" },
       { label: "Reportes", path: "/dashboard/reportes" },
+      { label: "Caja chica", path: "/dashboard/caja-chica" },
     ];
   }, [isCajero]);
 
@@ -54,8 +98,9 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
       { label: "Compras", path: "/dashboard/compras" },
       { label: "Productos", path: "/dashboard/productos" },
       { label: "Categorías", path: "/dashboard/categorias" },
-      { label: "Usuarios & Roles", path: "/dashboard/usuarios" },
-      { label: "Configuración", path: "/dashboard/configuracion" },
+      { label: "Registrar usuarios", path: "/dashboard/usuarios" },
+      { label: "Usuarios y roles", path: "/dashboard/configuracion" },
+      { label: "Perfil/Seguridad", path: "/dashboard/seguridad" },
     ];
   }, [isAdmin]);
 
@@ -92,7 +137,7 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
       )}
 
       {!collapsed && (
-        <aside className="hidden md:flex md:flex-col w-64 border-r border-[#5a1b22] bg-[#2b0a0b]/90">
+        <aside className="hidden md:flex md:flex-col w-64 min-h-screen border-r border-[#5a1b22] bg-[#2b0a0b]/90">
           <div className="px-6 py-5 border-b border-[#5a1b22] flex items-center justify-between">
             <div>
               <div className="text-xs uppercase tracking-[0.15em] text-[#d6b25f]">Joyería</div>
@@ -167,12 +212,12 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
 
           <div className="border-t border-[#5a1b22] px-4 py-4 text-xs text-[#c9b296] flex items-center justify-between">
             <div>
-              <div className="font-medium text-[#f1e4d4] truncate">{user.nombre}</div>
-              <div className="text-[11px] text-[#d6b25f]">{rolNorm}</div>
+              <div className="font-medium text-[#f1e4d4] truncate">{safeUser.nombre}</div>
+              <div className="text-[11px] text-[#d6b25f]">{rolNorm || "—"}</div>
             </div>
             <button
               type="button"
-              onClick={onLogout}
+              onClick={safeLogout}
               className="text-[11px] px-3 py-1 rounded-full border border-[#6b232b] hover:border-red-500 hover:text-red-400 transition-colors"
             >
               Cerrar sesión
@@ -197,7 +242,7 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
 
       {mobileOpen && (
         <div className="fixed inset-0 z-40 flex md:hidden">
-          <div className="w-64 bg-[#2b0a0b] border-r border-[#5a1b22] flex flex-col">
+          <div className="w-64 min-h-screen bg-[#2b0a0b] border-r border-[#5a1b22] flex flex-col">
             <div className="px-6 py-5 border-b border-[#5a1b22] flex items-center justify-between">
               <div>
                 <div className="text-xs uppercase tracking-[0.15em] text-[#d6b25f]">Joyería</div>
@@ -274,14 +319,14 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
 
             <div className="border-t border-[#5a1b22] px-4 py-4 text-xs text-[#c9b296] flex items-center justify-between">
               <div>
-                <div className="font-medium text-[#f1e4d4] truncate">{user.nombre}</div>
-                <div className="text-[11px] text-[#d6b25f]">{rolNorm}</div>
+                <div className="font-medium text-[#f1e4d4] truncate">{safeUser.nombre}</div>
+                <div className="text-[11px] text-[#d6b25f]">{rolNorm || "—"}</div>
               </div>
               <button
                 type="button"
                 onClick={() => {
                   setMobileOpen(false);
-                  onLogout();
+                  safeLogout();
                 }}
                 className="text-[11px] px-3 py-1 rounded-full border border-[#6b232b] hover:border-red-500 hover:text-red-400 transition-colors"
               >
@@ -290,11 +335,7 @@ export default function AdminSidebar({ user, onLogout }: AdminSidebarProps) {
             </div>
           </div>
 
-          <button
-            type="button"
-            className="flex-1 bg-black/50"
-            onClick={() => setMobileOpen(false)}
-          />
+          <button type="button" className="flex-1 bg-black/50" onClick={() => setMobileOpen(false)} />
         </div>
       )}
     </>

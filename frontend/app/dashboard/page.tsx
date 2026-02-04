@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import AdminSidebar from "../_components/AdminSidebar";
 
@@ -24,6 +24,7 @@ function buildApiUrl(path: string) {
   // Fallback local si Next corre separado del backend
   return `http://localhost:4000${path}`;
 }
+
 
 interface User {
   id: string;
@@ -69,6 +70,24 @@ interface LastSale {
   metodo: string;
 }
 
+interface SseTopProducto {
+  producto_id: string | number;
+  sku?: string | null;
+  nombre?: string | null;
+  qty?: number | string | null;
+  total?: number | string | null;
+}
+
+function pad2(n: number) {
+  return String(n).padStart(2, "0");
+}
+
+function todayISO() {
+  const d = new Date();
+  return `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+}
+
+
 export default function DashboardPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
@@ -79,15 +98,22 @@ export default function DashboardPage() {
   const [lowStock, setLowStock] = useState<LowStockItem[]>([]);
   const [lastSales, setLastSales] = useState<LastSale[]>([]);
   const [loading, setLoading] = useState(true);
+  const [selectedDate, setSelectedDate] = useState(todayISO());
 
-  const today = new Date().toLocaleDateString("es-GT", {
-    weekday: "long",
-    year: "numeric",
-    month: "short",
-    day: "numeric",
-  });
+  const dateLabel = useMemo(() => {
+    const fallback = new Date();
+    const candidate = selectedDate ? new Date(`${selectedDate}T00:00:00`) : fallback;
+    const value = Number.isNaN(candidate.getTime()) ? fallback : candidate;
 
-  // 1) Verificar sesión
+    return value.toLocaleDateString("es-GT", {
+      weekday: "long",
+      year: "numeric",
+      month: "short",
+      day: "numeric",
+    });
+  }, [selectedDate]);
+
+  // 1) Verificar sesion
   useEffect(() => {
     const t = localStorage.getItem("joyeria_token");
     const uStr = localStorage.getItem("joyeria_user");
@@ -114,17 +140,20 @@ export default function DashboardPage() {
       try {
         setLoading(true);
 
+        const scope = String(user?.rol || "").trim().toUpperCase() === "ADMIN" ? "SUCURSAL" : "USER";
+        const qs = `?scope=${scope}&date=${selectedDate}`;
+
         const [resSummary, resTop, resLow, resLast] = await Promise.all([
-          fetch(buildApiUrl("/api/dashboard/summary"), {
+          fetch(buildApiUrl(`/api/dashboard/summary${qs}`), {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(buildApiUrl("/api/dashboard/top-products"), {
+          fetch(buildApiUrl(`/api/dashboard/top-products${qs}`), {
             headers: { Authorization: `Bearer ${token}` },
           }),
           fetch(buildApiUrl("/api/dashboard/low-stock"), {
             headers: { Authorization: `Bearer ${token}` },
           }),
-          fetch(buildApiUrl("/api/dashboard/last-sales"), {
+          fetch(buildApiUrl(`/api/dashboard/last-sales${qs}`), {
             headers: { Authorization: `Bearer ${token}` },
           }),
         ]);
@@ -156,7 +185,62 @@ export default function DashboardPage() {
     };
 
     fetchData();
-  }, [token]);
+  }, [token, selectedDate, user?.rol]);
+
+  // 3) Tiempo real (solo hoy)
+  useEffect(() => {
+    if (!token || !user?.rol) return;
+
+    const today = todayISO();
+    if (selectedDate !== today) return;
+
+    const scope = String(user.rol || "").trim().toUpperCase() === "ADMIN" ? "SUCURSAL" : "USER";
+    const sseParams = new URLSearchParams({
+      token,
+      scope,
+      date: selectedDate,
+    });
+    const url = buildApiUrl(`/api/sales/summary/stream?${sseParams.toString()}`);
+    const ev = new EventSource(url);
+
+    const onSummary = async (evt: MessageEvent) => {
+      try {
+        const payload = JSON.parse(evt.data || "{}");
+        const data = payload?.data;
+
+        if (Array.isArray(data?.top_productos)) {
+          const mapped = (data.top_productos as SseTopProducto[]).map((p) => ({
+            id: String(p.producto_id),
+            sku: String(p.sku || ""),
+            nombre: String(p.nombre || ""),
+            unidades: Number(p.qty || 0),
+            facturacion: Number(p.total || 0),
+          }));
+          setTopProductos(mapped);
+        }
+
+        const res = await fetch(buildApiUrl(`/api/dashboard/summary?scope=${scope}&date=${selectedDate}`), {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const json = await res.json();
+          setSummary(json.data || json);
+        }
+      } catch (err) {
+        console.error("SSE resumen error", err);
+      }
+    };
+
+    ev.addEventListener("summary", onSummary);
+    ev.addEventListener("error", () => {
+      // mantener silencio para evitar spam en consola
+    });
+
+    return () => {
+      ev.removeEventListener("summary", onSummary);
+      ev.close();
+    };
+  }, [token, user?.rol, selectedDate]);
 
   const handleLogout = () => {
     localStorage.removeItem("joyeria_token");
@@ -192,19 +276,29 @@ export default function DashboardPage() {
       {/* Main content */}
       <div className="flex-1 flex flex-col">
         {/* Top bar */}
+
         <header className="border-b border-[#5a1b22] bg-[#2b0a0b]/80 backdrop-blur flex items-center justify-between px-4 md:px-8 py-4 sticky top-0 z-10">
           <div>
             <h1 className="text-xl md:text-2xl font-semibold">
-              Resumen del día
+              Resumen del dia
             </h1>
             <p className="text-xs md:text-sm text-[#c9b296] capitalize">
-              {today}
+              {dateLabel}
             </p>
           </div>
 
           <div className="flex items-center gap-3 text-xs md:text-sm">
+            <div className="flex items-center gap-2 rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-1.5">
+              <span className="text-[#c9b296]">Dia</span>
+              <input
+                type="date"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+                className="bg-transparent text-[#f8f1e6] text-xs outline-none"
+              />
+            </div>
             <span className="hidden md:inline text-[#c9b296]">
-              Joyería — Panel interno
+              Joyeria - Panel interno
             </span>
           </div>
         </header>

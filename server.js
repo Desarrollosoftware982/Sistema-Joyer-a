@@ -19,6 +19,10 @@ const reportsRoutes = require("./backend/src/routes/reports.routes");
 const purchasesRoutes = require("./backend/src/routes/purchases.routes");
 const cashRoutes = require("./backend/src/routes/cash.routes");
 const cashRegisterRoutes = require("./backend/src/routes/cashRegister.routes");
+const dashboardRoutes = require("./backend/src/routes/dashboard.routes");
+const cajaChicaRoutes = require("./backend/src/routes/cajaChica.routes");
+const adminRoutes = require("./backend/src/routes/admin.routes");
+const reportesRoutes = require("./backend/src/routes/reportes.routes");
 
 // ====== NEXT (frontend) ======
 const next = require("next");
@@ -49,6 +53,10 @@ nextApp
     app.use("/api/purchases", purchasesRoutes);
     app.use("/api/cash", cashRoutes);
     app.use("/api/cash-register", cashRegisterRoutes);
+    app.use("/api/dashboard", dashboardRoutes);
+    app.use("/api/caja-chica", cajaChicaRoutes);
+    app.use("/api/admin", adminRoutes);
+    app.use("/api/reportes", reportesRoutes);
 
  // Healthcheck
 app.get("/api/health", (req, res) => {

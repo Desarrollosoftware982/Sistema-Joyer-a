@@ -40,6 +40,27 @@ router.post(
 );
 
 /**
+ * ✅ NUEVO: Resumen del día (Mini dashboard)
+ * GET /api/sales/summary/today?scope=USER|SUCURSAL
+ *
+ * - USER (default): solo ventas del usuario actual
+ * - SUCURSAL: toda la sucursal (solo ADMIN)
+ */
+router.get(
+  "/summary/today",
+  authRequired,
+  attachCurrentUser,
+  requireRole(ROLES_ADMIN_CAJERO),
+  salesController.resumenVentasHoy
+);
+
+/**
+ * ? NUEVO: Resumen en tiempo real (SSE)
+ * GET /api/sales/summary/stream?token=...&date=YYYY-MM-DD&scope=USER|SUCURSAL
+ */
+router.get("/summary/stream", salesController.resumenVentasStream);
+
+/**
  * =============================
  * Ventas · Configuración (frontend)
  * Endpoints para modo manual / carga masiva

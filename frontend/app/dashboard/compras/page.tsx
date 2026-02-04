@@ -34,6 +34,7 @@ export default function ComprasHomePage() {
 
     try {
       const u: User = JSON.parse(uStr);
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       setUser(u);
     } catch {
       router.push("/login");

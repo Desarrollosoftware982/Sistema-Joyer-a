@@ -12,6 +12,13 @@ const API_URL =
   (process.env.NEXT_PUBLIC_API_URL &&
     process.env.NEXT_PUBLIC_API_URL.trim().replace(/\/$/, "")) ||
   (typeof window !== "undefined" ? window.location.origin : "");
+// ✅ Auto-cierre (cliente): hora local
+const AUTO_CLOSE_AT = { hour: 23, minute: 50 };
+// cada cuánto revisamos (en ms)
+const AUTO_CLOSE_CHECK_MS = 30_000;
+
+// ✅ “Modo ninja”: refresco silencioso al volver a la pestaña/ventana (evita parpadeos)
+const NINJA_REFRESH_THROTTLE_MS = 2500;
 
 interface User {
   id: string;
@@ -25,6 +32,7 @@ interface ProductoPublico {
   sku: string;
   nombre: string;
   precio_venta: number;
+  precio_mayorista?: number | null;
   codigo_barras: string | null;
   categoria?: string | null;
   disponible?: boolean;
@@ -60,6 +68,13 @@ export default function CajaPage() {
 
   const [user, setUser] = useState<User | null>(null);
   const [token, setToken] = useState<string | null>(null);
+  const [cajaChica, setCajaChica] = useState<{
+    saldoHoy: number;
+    totalEntregadoHoy: number;
+    totalCambiosHoy: number;
+    ultimaEntrega: { fecha: string; monto: number } | null;
+  } | null>(null);
+  const [loadingCajaChica, setLoadingCajaChica] = useState(false);
 
   // Caja (apertura)
   const [cajaEstado, setCajaEstado] = useState<CajaEstado>("CARGANDO");
@@ -86,12 +101,15 @@ export default function CajaPage() {
       sku: string;
       codigo_barras: string | null;
       precio_unitario: number;
+      precio_mayorista?: number | null;
       qty: number;
     }>
   >([]);
 
   const [metodoPago, setMetodoPago] = useState<MetodoPago>("EFECTIVO");
   const [efectivoRecibido, setEfectivoRecibido] = useState<string>("");
+  const [showPreTicket, setShowPreTicket] = useState(false);
+  const [clienteNombre, setClienteNombre] = useState("");
 
   // ==========================
   // ✅ Carrito móvil (botón flotante + drawer)
@@ -102,6 +120,17 @@ export default function CajaPage() {
     () => cart.reduce((acc, it) => acc + (Number(it.qty) || 0), 0),
     [cart]
   );
+  const wholesaleApplies = cartCount >= 6;
+
+  const getUnitPrice = (it: {
+    precio_unitario: number;
+    precio_mayorista?: number | null;
+  }) => {
+    if (wholesaleApplies && it.precio_mayorista != null && Number(it.precio_mayorista) > 0) {
+      return Number(it.precio_mayorista);
+    }
+    return Number(it.precio_unitario);
+  };
 
   // ✅ evita scroll del fondo cuando el drawer está abierto
   useEffect(() => {
@@ -198,6 +227,82 @@ export default function CajaPage() {
         };
 
   // ==========================
+  // ✅ Helpers para auto-cierre
+  // ==========================
+  const ymdLocal = (d: Date) => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  };
+
+  // ==========================
+  // ✅ Notificación “no-error” de auto-cierre
+  // ==========================
+  const [autoCloseNotice, setAutoCloseNotice] = useState<{
+    text: string;
+    tone: "amber" | "emerald";
+  } | null>(null);
+
+  const autoCloseNoticeTimerRef = useRef<any>(null);
+  const lastAutoCloseNoticeKeyRef = useRef<string>("");
+
+  const showAutoCloseNotice = (reason?: any) => {
+    const r = String(reason ?? "").toLowerCase();
+    const isCutoff = r.includes("2350") || r.includes("corte") || r.includes("cutoff");
+
+    const key = `${ymdLocal(new Date())}_${isCutoff ? "cutoff" : "day"}`;
+    if (lastAutoCloseNoticeKeyRef.current === key) return;
+    lastAutoCloseNoticeKeyRef.current = key;
+
+    const text = isCutoff
+      ? "Caja cerrada automáticamente por corte (23:50)."
+      : "Caja cerrada automáticamente por cambio de día.";
+
+    const tone: "amber" | "emerald" = isCutoff ? "amber" : "emerald";
+
+    try {
+      if (autoCloseNoticeTimerRef.current) clearTimeout(autoCloseNoticeTimerRef.current);
+    } catch {}
+
+    setAutoCloseNotice({ text, tone });
+
+    autoCloseNoticeTimerRef.current = setTimeout(() => {
+      setAutoCloseNotice(null);
+      autoCloseNoticeTimerRef.current = null;
+    }, 5200);
+  };
+
+  useEffect(() => {
+    return () => {
+      try {
+        if (autoCloseNoticeTimerRef.current) clearTimeout(autoCloseNoticeTimerRef.current);
+      } catch {}
+      autoCloseNoticeTimerRef.current = null;
+    };
+  }, []);
+
+  const autoCloseInFlightRef = useRef(false);
+
+  const hasAutoClosedToday = () => {
+    try {
+      if (typeof window === "undefined") return false;
+      const key = `joyeria_caja_autoclose_${ymdLocal(new Date())}`;
+      return localStorage.getItem(key) === "1";
+    } catch {
+      return false;
+    }
+  };
+
+  const markAutoClosedToday = () => {
+    try {
+      if (typeof window === "undefined") return;
+      const key = `joyeria_caja_autoclose_${ymdLocal(new Date())}`;
+      localStorage.setItem(key, "1");
+    } catch {}
+  };
+
+  // ==========================
   // 1) Sesión + rol
   // ==========================
   useEffect(() => {
@@ -228,11 +333,13 @@ export default function CajaPage() {
   // ==========================
   // 2) Estado de caja del día
   // ==========================
-  const verificarCajaHoy = async () => {
-    if (!token) return;
+  const verificarCajaHoy = async (opts?: { silent?: boolean }) => {
+    if (!token) return null;
+
+    const silent = !!opts?.silent;
 
     try {
-      setLoadingCaja(true);
+      if (!silent) setLoadingCaja(true);
       setError(null);
 
       const res = await fetch(`${API_URL}/api/cash-register/today`, {
@@ -242,6 +349,18 @@ export default function CajaPage() {
       const data = await res.json();
       if (!res.ok)
         throw new Error(data?.message || "Error verificando caja del día");
+
+      // ✅ soporte opcional por si backend manda meta de autocierre (no rompe si no existe)
+      const autocloseMeta =
+        data?.data?.autoclose || data?.autoclose || data?.meta?.autoclose || null;
+
+      if (data?.code === "CAJA_AUTOCERRADA" || autocloseMeta?.closed) {
+        // marca para evitar insistencia en autocierre cliente
+        markAutoClosedToday();
+
+        // ✅ Notificación bonita (no-error)
+        showAutoCloseNotice(autocloseMeta?.reason);
+      }
 
       const estado = (data?.data?.estado || "SIN_APERTURA") as CajaEstado;
       const cierre = (data?.data?.cierreActual || null) as CierreCaja | null;
@@ -253,19 +372,98 @@ export default function CajaPage() {
       if (estado === "ABIERTA" && cierre?.monto_apertura != null) {
         setMontoApertura(String(Number(cierre.monto_apertura || 0).toFixed(2)));
       }
+
+      return { estado, cierre, autocloseMeta };
     } catch (e: any) {
       console.error(e);
       setCajaEstado("SIN_APERTURA");
       setCierreActual(null);
       setError(e?.message ?? "Error verificando caja del día");
+      return null;
     } finally {
-      setLoadingCaja(false);
+      if (!silent) setLoadingCaja(false);
+    }
+  };
+
+  const cargarCajaChica = async (opts?: { silent?: boolean }) => {
+    if (!token) return;
+    const silent = !!opts?.silent;
+    try {
+      if (!silent) setLoadingCajaChica(true);
+      const res = await fetch(`${API_URL}/api/caja-chica/saldo`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data?.message || "Error cargando caja chica");
+      }
+      setCajaChica(data?.data || null);
+    } catch (e) {
+      console.error(e);
+      setCajaChica(null);
+    } finally {
+      if (!silent) setLoadingCajaChica(false);
     }
   };
 
   useEffect(() => {
     if (!token) return;
     verificarCajaHoy();
+    cargarCajaChica({ silent: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [token]);
+
+  useEffect(() => {
+    if (cajaEstado === "ABIERTA") {
+      cargarCajaChica({ silent: true });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [cajaEstado]);
+
+  // ==========================
+  // ✅ MODO NINJA: refresh silencioso (focus/visibility) con throttle
+  // ==========================
+  const ninjaLastRefreshAtRef = useRef(0);
+  const ninjaInFlightRef = useRef(false);
+
+  const ninjaRefreshCaja = async (opts?: { force?: boolean }) => {
+    if (!token) return;
+    if (ninjaInFlightRef.current) return;
+
+    const now = Date.now();
+    const throttle = opts?.force ? 0 : NINJA_REFRESH_THROTTLE_MS;
+    if (!opts?.force && now - ninjaLastRefreshAtRef.current < throttle) return;
+
+    ninjaLastRefreshAtRef.current = now;
+    ninjaInFlightRef.current = true;
+    try {
+      await verificarCajaHoy({ silent: true });
+    } finally {
+      ninjaInFlightRef.current = false;
+    }
+  };
+
+  useEffect(() => {
+    if (!token) return;
+
+    const onFocus = () => {
+      // refresco silencioso al volver a la ventana
+      ninjaRefreshCaja();
+    };
+
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") {
+        ninjaRefreshCaja();
+      }
+    };
+
+    window.addEventListener("focus", onFocus);
+    document.addEventListener("visibilitychange", onVisibility);
+
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [token]);
 
@@ -315,7 +513,7 @@ export default function CajaPage() {
   };
 
   // ==========================
-  // ✅ Cerrar caja (monto_cierre_reportado opcional)
+  // ✅ Cerrar caja (monto_cierre_reportado opcional) - Manual
   // ==========================
   const cerrarCaja = async () => {
     if (!token) return;
@@ -387,6 +585,152 @@ export default function CajaPage() {
   };
 
   // ==========================
+  // ✅ Cierre automático de caja (sin confirm, sin monto contado)
+  // ==========================
+  const cerrarCajaAutomatico = async (reason: "cambio_dia" | "corte_2350") => {
+    if (!token) return;
+    if (cajaEstado !== "ABIERTA") return;
+
+    // si ya se ejecutó auto-cierre hoy, no insistimos
+    if (hasAutoClosedToday()) return;
+
+    // evita spam de requests
+    if (autoCloseInFlightRef.current) return;
+    if (loadingCaja) return;
+
+    // si hay carrito con cosas, NO cerramos por seguridad (evita “ventas fantasma”)
+    if (cart.length > 0) {
+      setError(
+        "Cierre automático pendiente: tienes productos en el carrito. Confirma o vacía antes del corte."
+      );
+      return;
+    }
+
+    autoCloseInFlightRef.current = true;
+
+    try {
+      setLoadingCaja(true);
+      setError(null);
+
+      // ⚠️ payload vacío para no romper backend por campos extra
+      const res = await fetch(`${API_URL}/api/cash-register/close`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const data = await res.json();
+
+      // si backend dice que ya estaba cerrada, solo refrescamos
+      if (!res.ok) {
+        const msg = data?.message || "Error al cerrar caja automáticamente";
+        // intentamos refrescar de todos modos
+        await verificarCajaHoy();
+        setError(msg);
+        return;
+      }
+
+      const cierre = (data?.data?.cierre || null) as CierreCaja | null;
+      setCierreActual(cierre);
+
+      // marca que hoy ya se hizo (para no repetir cada 30s)
+      markAutoClosedToday();
+
+      // limpia UI
+      setMontoCierreReportado("");
+      setShowCerrarCaja(false);
+
+      // refresca estado
+      await verificarCajaHoy();
+    } catch (e: any) {
+      console.error(e);
+      setError(e?.message ?? "Error al cerrar caja automáticamente");
+    } finally {
+      autoCloseInFlightRef.current = false;
+      setLoadingCaja(false);
+    }
+  };
+
+  // ==========================
+  // ✅ Auto-cierre: detecta cambio de día o corte 23:50
+  // (Mejorado: antes de intentar cerrar, refresca silencioso por si backend ya autocerró)
+  // ==========================
+  useEffect(() => {
+    if (!token) return;
+    if (cajaEstado !== "ABIERTA") return;
+
+    // si estás en UI de cierre o en drawer, no interrumpimos
+    if (showCerrarCaja) return;
+    if (showCartMobile) return;
+
+    const checkAutoClose = () => {
+      try {
+        if (cajaEstado !== "ABIERTA") return;
+
+        const now = new Date();
+        const nowYMD = ymdLocal(now);
+
+        // 1) Si la caja abierta pertenece a un día anterior -> cerrar YA
+        let shouldClose = false;
+        let reason: "cambio_dia" | "corte_2350" | null = null;
+
+        if (cierreActual?.fecha_inicio) {
+          const start = new Date(cierreActual.fecha_inicio);
+          const startYMD = ymdLocal(start);
+
+          if (startYMD !== nowYMD) {
+            shouldClose = true;
+            reason = "cambio_dia";
+          }
+        }
+
+        // 2) Corte por hora (23:50)
+        if (!shouldClose) {
+          const mins = now.getHours() * 60 + now.getMinutes();
+          const threshold = AUTO_CLOSE_AT.hour * 60 + AUTO_CLOSE_AT.minute;
+
+          if (mins >= threshold) {
+            shouldClose = true;
+            reason = "corte_2350";
+          }
+        }
+
+        if (!shouldClose || !reason) return;
+
+        // ✅ Primero refresco silencioso: si backend ya autocerró, evitamos doble cierre
+        (async () => {
+          await ninjaRefreshCaja({ force: true });
+
+          // Si tras refrescar ya no está abierta, salimos
+          // (no confiamos en estado inmediato por async, pero esto reduce doble-cierre)
+          // Si quedó abierta, entonces sí intentamos cerrar desde cliente.
+          if (hasAutoClosedToday()) return;
+
+          // Si hay carrito, cerrarCajaAutomatico se encarga de avisar y no cerrar.
+          await cerrarCajaAutomatico(reason);
+        })();
+      } catch {}
+    };
+
+    // corre inmediato y luego por intervalo
+    checkAutoClose();
+    const id = setInterval(checkAutoClose, AUTO_CLOSE_CHECK_MS);
+
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [
+    token,
+    cajaEstado,
+    cierreActual?.fecha_inicio,
+    cart.length,
+    showCerrarCaja,
+    showCartMobile,
+  ]);
+
+  // ==========================
   // 4) Cargar inventario público (solo cuando ABIERTA)
   // ==========================
   const cargarPublico = async () => {
@@ -409,6 +753,10 @@ export default function CajaPage() {
         nombre: String(r.nombre ?? ""),
         codigo_barras: r.codigo_barras ?? null,
         precio_venta: Number(r.precio_venta ?? 0),
+        precio_mayorista:
+          r.precio_mayorista == null || r.precio_mayorista === ""
+            ? null
+            : Number(r.precio_mayorista),
         categoria: r.categoria ?? null,
         disponible: typeof r.disponible === "boolean" ? r.disponible : true,
       }));
@@ -453,8 +801,17 @@ export default function CajaPage() {
   // 6) Carrito
   // ==========================
   const total = useMemo(() => {
-    return cart.reduce((acc, it) => acc + it.qty * it.precio_unitario, 0);
-  }, [cart]);
+    return cart.reduce((acc, it) => acc + it.qty * getUnitPrice(it), 0);
+  }, [cart, wholesaleApplies]);
+
+  const ahorroMayorista = useMemo(() => {
+    if (!wholesaleApplies) return 0;
+    return cart.reduce((acc, it) => {
+      if (it.precio_mayorista == null || Number(it.precio_mayorista) <= 0) return acc;
+      const diff = Number(it.precio_unitario) - Number(it.precio_mayorista);
+      return diff > 0 ? acc + diff * it.qty : acc;
+    }, 0);
+  }, [cart, wholesaleApplies]);
 
   const cambio = useMemo(() => {
     if (metodoPago !== "EFECTIVO") return 0;
@@ -486,6 +843,10 @@ export default function CajaPage() {
           sku: p.sku,
           codigo_barras: p.codigo_barras ?? null,
           precio_unitario: precio,
+          precio_mayorista:
+            p.precio_mayorista == null || Number(p.precio_mayorista) <= 0
+              ? null
+              : Number(p.precio_mayorista),
           qty: 1,
         },
       ];
@@ -705,6 +1066,31 @@ export default function CajaPage() {
   // ==========================
   // 8) Confirmar venta (POST /api/sales/pos)
   // ==========================
+  const abrirPreTicket = () => {
+    if (!token) return;
+
+    if (cajaEstado !== "ABIERTA") {
+      setError("Debes aperturar la caja antes de vender.");
+      return;
+    }
+
+    if (cart.length === 0) {
+      setError("El carrito está vacío.");
+      return;
+    }
+
+    if (metodoPago === "EFECTIVO") {
+      const rec = Number(efectivoRecibido || 0);
+      if (rec < total) {
+        setError("Efectivo insuficiente.");
+        return;
+      }
+    }
+
+    setError(null);
+    setShowPreTicket(true);
+  };
+
   const confirmarVenta = async () => {
     if (!token) return;
 
@@ -734,9 +1120,10 @@ export default function CajaPage() {
         items: cart.map((x) => ({
           producto_id: x.producto_id,
           qty: x.qty,
-          precio_unitario: x.precio_unitario,
+          precio_unitario: getUnitPrice(x),
         })),
         metodo_pago: metodoPago,
+        cliente_nombre: clienteNombre?.trim() || null,
         efectivo_recibido:
           metodoPago === "EFECTIVO" ? Number(efectivoRecibido || 0) : null,
       };
@@ -753,9 +1140,16 @@ export default function CajaPage() {
       const data = await res.json();
       if (!res.ok) throw new Error(data?.message || "Error al registrar venta");
 
-      imprimirTicket(data?.venta_id, total, cambio);
+      imprimirTicket(data?.venta_id, total, cambio, clienteNombre);
 
       clearCart();
+      setClienteNombre("");
+      setShowPreTicket(false);
+
+      // ✅ MODO NINJA: refresca caja e inventario después de vender
+      await verificarCajaHoy({ silent: true });
+      await cargarCajaChica({ silent: true });
+      await cargarPublico();
     } catch (e: any) {
       console.error(e);
       setError(e?.message ?? "Error al registrar venta");
@@ -767,7 +1161,8 @@ export default function CajaPage() {
   const imprimirTicket = (
     ventaId: string,
     totalVenta: number,
-    cambioLocal: number
+    cambioLocal: number,
+    cliente?: string
   ) => {
     if (typeof window === "undefined") return;
 
@@ -780,7 +1175,7 @@ export default function CajaPage() {
         <tr>
           <td style="padding:4px 0;">${escapeHtml(it.nombre)}</td>
           <td style="padding:4px 0; text-align:right;">x${it.qty}</td>
-          <td style="padding:4px 0; text-align:right;">Q ${it.precio_unitario.toFixed(
+          <td style="padding:4px 0; text-align:right;">Q ${getUnitPrice(it).toFixed(
             2
           )}</td>
         </tr>
@@ -797,21 +1192,24 @@ export default function CajaPage() {
           <title>Ticket</title>
           <style>
             body{font-family:Arial,sans-serif; padding:12px;}
-            h2{margin:0 0 8px;}
+            h2{margin:0 0 8px;} .brand{font-size:10px; letter-spacing:4px; color:#555;}
             .muted{color:#666; font-size:12px;}
             table{width:100%; border-collapse:collapse; margin-top:8px;}
             hr{margin:10px 0;}
           </style>
         </head>
         <body>
+          <div class="brand">JOYERIA</div>
           <h2>Ticket de venta</h2>
           <div class="muted">Venta: ${escapeHtml(ventaId || "")}</div>
           <div class="muted">${escapeHtml(new Date().toLocaleString("es-GT"))}</div>
+          <div class="muted">Cliente: ${escapeHtml(cliente || "Consumidor final")}</div>
           <table>${rows}</table>
           <hr/>
           <div style="display:flex; justify-content:space-between;">
             <b>Total</b><b>Q ${Number(totalVenta || 0).toFixed(2)}</b>
           </div>
+          <div class="muted" style="margin-top:6px;">Metodo: ${escapeHtml(metodoPago)}</div>
           ${
             metodoPago === "EFECTIVO"
               ? `<div style="display:flex; justify-content:space-between; margin-top:6px;">
@@ -822,7 +1220,7 @@ export default function CajaPage() {
               : ""
           }
           <hr/>
-          <div class="muted">Gracias. Vuelva pronto ✨</div>
+          <div class="muted">Gracias por su compra.</div>
           <script>setTimeout(()=>window.print(), 200);</script>
         </body>
       </html>
@@ -876,7 +1274,7 @@ export default function CajaPage() {
 
             <button
               type="button"
-              onClick={verificarCajaHoy}
+              onClick={() => verificarCajaHoy()}
               className="rounded-full border border-[#7a2b33] px-3 py-1.5 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80 disabled:opacity-40"
               disabled={loadingCaja}
             >
@@ -1105,7 +1503,7 @@ export default function CajaPage() {
                   </div>
 
                   <div className="text-[11px] text-[#e3c578]">
-                    {fmtQ(it.qty * it.precio_unitario)}
+                    {fmtQ(it.qty * getUnitPrice(it))}
                   </div>
                 </div>
               </div>
@@ -1144,6 +1542,13 @@ export default function CajaPage() {
                 <b className="text-[#e3c578]">{fmtQ(total)}</b>
               </div>
 
+              {wholesaleApplies && ahorroMayorista > 0 && (
+                <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
+                  <span>Descuento mayorista</span>
+                  <span className="text-[#f1e4d4]">- {fmtQ(ahorroMayorista)}</span>
+                </div>
+              )}
+
               {metodoPago === "EFECTIVO" && (
                 <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
                   <span>Cambio</span>
@@ -1153,11 +1558,11 @@ export default function CajaPage() {
 
               <button
                 type="button"
-                onClick={confirmarVenta}
+                onClick={abrirPreTicket}
                 disabled={loading}
                 className="w-full rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 transition-colors px-4 py-3 text-sm font-semibold disabled:opacity-40"
               >
-                ✅ Confirmar venta
+                Procesar compra
               </button>
             </div>
           </div>
@@ -1182,12 +1587,8 @@ export default function CajaPage() {
                 <h2 className="text-sm font-semibold shrink-0">Productos</h2>
               </div>
 
-              {/* ✅ Layout pedido:
-                  1) Buscar (línea 1)
-                  2) Escaneo (línea 2)
-                  Siempre apilado para evitar cortar el buscador */}
               <div className="mt-3 flex flex-col gap-3 min-w-0">
-                {/* Buscar (línea 1) */}
+                {/* Buscar */}
                 <div className="flex items-center gap-2 w-full min-w-0">
                   <input
                     value={search}
@@ -1208,7 +1609,7 @@ export default function CajaPage() {
                   )}
                 </div>
 
-                {/* Escaneo (línea 2) */}
+                {/* Escaneo */}
                 <div className="w-full min-w-0">
                   <div className="flex items-center justify-between px-1 mb-1 flex-wrap gap-2">
                     <span className="text-[10px] text-[#c9b296]">
@@ -1239,7 +1640,6 @@ export default function CajaPage() {
                   </div>
 
                   <div className="relative">
-                    {/* icono */}
                     <div className="absolute left-3 top-1/2 -translate-y-1/2 pointer-events-none">
                       <svg
                         width="16"
@@ -1420,55 +1820,48 @@ export default function CajaPage() {
           </section>
         </main>
 
-        {/* ✅ Botón flotante: SOLO móvil (mismo tamaño que el menú) */}
-<button
-  type="button"
-  onClick={() => setShowCartMobile(true)}
-  disabled={cartCount === 0}
-  className={[
-    "md:hidden fixed z-40",
-    "right-4",
-    "bottom-[calc(1rem+env(safe-area-inset-bottom)+3.25rem)]",
+        {/* ✅ Botón flotante: SOLO móvil */}
+        <button
+          type="button"
+          onClick={() => setShowCartMobile(true)}
+          disabled={cartCount === 0}
+          className={[
+            "md:hidden fixed z-40",
+            "right-5",
+            "bottom-[calc(1.25rem+env(safe-area-inset-bottom)+4.25rem)]",
+            "h-12 w-12 rounded-full",
+            "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
+            "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
+            "flex items-center justify-center",
+            cartCount === 0 ? "opacity-40" : "opacity-100",
+          ].join(" ")}
+          title="Ver carrito"
+        >
+          <span className="text-lg">🛒</span>
 
-    // ✅ MISMO tamaño que botón menú (3 barras)
-    "h-10 w-10 rounded-full",
-
-    "border border-[#d6b25f]/60 bg-[#2b0a0b]/85 backdrop-blur",
-    "shadow-lg hover:bg-[#3a0d12]/90 transition-colors",
-    "flex items-center justify-center",
-    cartCount === 0 ? "opacity-40" : "opacity-100",
-  ].join(" ")}
-  title="Ver carrito"
->
-  {/* ✅ Icono un poco más pequeño para que se vea “igual de denso” */}
-  <span className="text-sm leading-none">🛒</span>
-
-  {cartCount > 0 && (
-    <span
-      className={[
-        "absolute -top-1 -right-1",
-        "min-w-[16px] h-[16px] px-1",
-        "rounded-full text-[9px] font-bold",
-        "bg-[#d6b25f] text-[#2b0a0b]",
-        "flex items-center justify-center",
-      ].join(" ")}
-    >
-      {cartCount}
-    </span>
-  )}
-</button>
-
+          {cartCount > 0 && (
+            <span
+              className={[
+                "absolute -top-1 -right-1",
+                "min-w-[20px] h-[20px] px-1",
+                "rounded-full text-[10px] font-bold",
+                "bg-[#d6b25f] text-[#2b0a0b]",
+                "flex items-center justify-center",
+              ].join(" ")}
+            >
+              {cartCount}
+            </span>
+          )}
+        </button>
 
         {/* ✅ Drawer/Modal: SOLO móvil */}
         {showCartMobile && (
           <div className="md:hidden fixed inset-0 z-50">
-            {/* backdrop */}
             <div
               className="absolute inset-0 bg-black/60"
               onClick={() => setShowCartMobile(false)}
             />
 
-            {/* drawer */}
             <div
               className={[
                 "absolute left-0 right-0 bottom-0",
@@ -1478,6 +1871,89 @@ export default function CajaPage() {
               ].join(" ")}
             >
               {renderCarritoUI({ showClose: true })}
+            </div>
+          </div>
+        )}
+
+        {showPreTicket && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center px-4">
+            <div
+              className="absolute inset-0 bg-black/60"
+              onClick={() => setShowPreTicket(false)}
+            />
+            <div className="relative w-full max-w-lg rounded-2xl border border-[#5a1b22] bg-[#3a0d12]/95 p-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <div className="text-[11px] uppercase tracking-[0.35em] text-[#d6b25f]/80">
+                    Joyeria
+                  </div>
+                  <h3 className="text-lg font-semibold">Pre-ticket</h3>
+                  <p className="text-xs text-[#c9b296]">Verifica antes de procesar.</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowPreTicket(false)}
+                  className="rounded-full border border-[#7a2b33] px-3 py-1 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80"
+                >
+                  Cerrar
+                </button>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-[11px] text-[#c9b296]">Nombre del cliente</label>
+                <input
+                  value={clienteNombre}
+                  onChange={(e) => setClienteNombre(e.target.value)}
+                  placeholder="Consumidor final"
+                  className="mt-2 w-full rounded-xl border border-[#6b232b] bg-[#2b0a0b]/60 px-3 py-2 text-sm text-[#f8f1e6] outline-none focus:ring-2 focus:ring-[#d6b25f]"
+                />
+              </div>
+
+              <div className="mt-4 rounded-xl border border-[#5a1b22] bg-[#2b0a0b]/60 p-3 text-sm">
+                <div className="flex items-center justify-between text-[11px] text-[#c9b296]">
+                  <span>Metodo</span>
+                  <span className="text-[#f1e4d4]">{metodoPago}</span>
+                </div>
+                <div className="mt-2 max-h-40 overflow-auto text-[12px]">
+                  {cart.map((it) => (
+                    <div key={it.producto_id} className="flex items-center justify-between py-1">
+                      <span className="text-[#f1e4d4]">
+                        {it.nombre} x{it.qty}
+                      </span>
+                      <span className="text-[#e3c578]">{fmtQ(it.qty * getUnitPrice(it))}</span>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-3 h-px bg-[#5a1b22]" />
+                <div className="mt-2 flex items-center justify-between">
+                  <b>Total</b>
+                  <b className="text-[#e3c578]">{fmtQ(total)}</b>
+                </div>
+                {metodoPago === "EFECTIVO" && (
+                  <div className="mt-1 flex items-center justify-between text-[11px] text-[#c9b296]">
+                    <span>Cambio</span>
+                    <span className="text-[#f1e4d4]">{fmtQ(cambio)}</span>
+                  </div>
+                )}
+              </div>
+
+              <div className="mt-4 flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowPreTicket(false)}
+                  className="flex-1 rounded-2xl border border-[#7a2b33] px-4 py-2 text-sm text-[#f1e4d4] hover:bg-[#4b141a]/80"
+                >
+                  Cancelar
+                </button>
+                <button
+                  type="button"
+                  onClick={confirmarVenta}
+                  disabled={loading}
+                  className="flex-1 rounded-2xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/20 px-4 py-2 text-sm font-semibold disabled:opacity-40"
+                >
+                  Procesar compra
+                </button>
+              </div>
             </div>
           </div>
         )}
@@ -1508,6 +1984,32 @@ export default function CajaPage() {
                   Apertura: {fmtQ(cierreActual?.monto_apertura ?? 0)}
                 </p>
               )}
+              {cajaEstado === "ABIERTA" && (
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-[#c9b296]">
+                  <span className="rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-2 py-1">
+                    Caja chica: {fmtQ(cajaChica?.saldoHoy || 0)}
+                  </span>
+                  <span className="rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-2 py-1">
+                    Entregado hoy: {fmtQ(cajaChica?.totalEntregadoHoy || 0)}
+                  </span>
+                  <span className="rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-2 py-1">
+                    Cambios hoy: {fmtQ(cajaChica?.totalCambiosHoy || 0)}
+                  </span>
+                  {cajaChica?.ultimaEntrega && (
+                    <span className="rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-2 py-1">
+                      Ultima entrega:{" "}
+                      {new Date(cajaChica.ultimaEntrega.fecha).toLocaleString(
+                        "es-GT"
+                      )}
+                    </span>
+                  )}
+                  {loadingCajaChica && (
+                    <span className="rounded-full border border-[#6b232b] bg-[#2b0a0b]/60 px-2 py-1">
+                      Caja chica...
+                    </span>
+                  )}
+                </div>
+              )}
             </div>
 
             <div className="flex items-center gap-2 justify-end">
@@ -1525,7 +2027,7 @@ export default function CajaPage() {
 
               <button
                 type="button"
-                onClick={verificarCajaHoy}
+                onClick={() => verificarCajaHoy()}
                 className="rounded-full border border-[#7a2b33] px-3 py-1.5 text-[11px] text-[#f1e4d4] hover:bg-[#4b141a]/80 disabled:opacity-40"
                 disabled={loadingCaja}
               >
@@ -1584,6 +2086,22 @@ export default function CajaPage() {
 
           {!!error && (
             <p className="text-[11px] text-red-300 mt-2">Error: {error}</p>
+          )}
+
+          {/* ✅ Notificación de auto-cierre */}
+          {autoCloseNotice && (
+            <div
+              className={[
+                "mt-2 inline-flex items-center gap-2 rounded-full border px-3 py-1 text-[11px] font-semibold",
+                autoCloseNotice.tone === "amber"
+                  ? "border-amber-400/30 bg-amber-400/10 text-amber-100"
+                  : "border-emerald-400/30 bg-emerald-400/10 text-emerald-100",
+              ].join(" ")}
+              role="status"
+            >
+              <span className="opacity-90">🤖</span>
+              {autoCloseNotice.text}
+            </div>
           )}
         </header>
 
