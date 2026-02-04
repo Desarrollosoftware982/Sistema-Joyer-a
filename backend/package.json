@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "",
   "main": "index.js",
- "scripts": {
+  "scripts": {
     "dev": "nodemon src/index.js",
     "start": "node src/index.js",
     "prisma:pull": "prisma db pull",
@@ -17,7 +17,6 @@
   "type": "commonjs",
   "dependencies": {
     "@prisma/client": "^6.19.0",
-    "prisma": "^6.19.0",
     "bcryptjs": "^3.0.3",
     "bwip-js": "^4.8.0",
     "cors": "^2.8.5",
@@ -28,7 +27,10 @@
     "node-cron": "^4.2.1",
     "pdfkit": "^0.17.2",
     "pg": "^8.16.3",
+    "prisma": "^6.19.0",
+    "qrcode": "^1.5.4",
     "react-barcode": "^1.6.1",
+    "speakeasy": "^2.0.0",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {
