@@ -618,7 +618,7 @@ router.get(
       // Si no hay abierta, mostramos la última de HOY (en timezone GT)
       const { start, end } = getTodayRangeInTz(BUSINESS_TZ);
 
-      const cierre = await prisma.cierres_caja.findFirst({
+      let cierre = await prisma.cierres_caja.findFirst({
         where: {
           sucursal_id: sucursal.id,
           ...(roleNorm === 'ADMIN' && scope === 'SUCURSAL'
