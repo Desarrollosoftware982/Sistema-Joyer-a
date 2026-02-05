@@ -229,11 +229,52 @@ export default function CajaPage() {
   // ==========================
   // ✅ Helpers para auto-cierre
   // ==========================
-  const ymdLocal = (d: Date) => {
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, "0");
-    const day = String(d.getDate()).padStart(2, "0");
-    return `${y}-${m}-${day}`;
+  const BUSINESS_TZ = "America/Guatemala";
+
+  const tzParts = (date: Date, tz = BUSINESS_TZ) => {
+    try {
+      const fmt = new Intl.DateTimeFormat("en-CA", {
+        timeZone: tz,
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+        hour: "2-digit",
+        minute: "2-digit",
+        second: "2-digit",
+        hour12: false,
+      });
+
+      const parts = fmt.formatToParts(date);
+      const map: Record<string, string> = {};
+      for (const p of parts) {
+        if (p.type !== "literal") map[p.type] = p.value;
+      }
+
+      return {
+        year: Number(map.year),
+        month: Number(map.month),
+        day: Number(map.day),
+        hour: Number(map.hour),
+        minute: Number(map.minute),
+        second: Number(map.second),
+      };
+    } catch {
+      return {
+        year: date.getFullYear(),
+        month: date.getMonth() + 1,
+        day: date.getDate(),
+        hour: date.getHours(),
+        minute: date.getMinutes(),
+        second: date.getSeconds(),
+      };
+    }
+  };
+
+  const ymdInTz = (d: Date, tz = BUSINESS_TZ) => {
+    const p = tzParts(d, tz);
+    const m = String(p.month).padStart(2, "0");
+    const day = String(p.day).padStart(2, "0");
+    return `${p.year}-${m}-${day}`;
   };
 
   // ==========================
@@ -251,7 +292,7 @@ export default function CajaPage() {
     const r = String(reason ?? "").toLowerCase();
     const isCutoff = r.includes("2350") || r.includes("corte") || r.includes("cutoff");
 
-    const key = `${ymdLocal(new Date())}_${isCutoff ? "cutoff" : "day"}`;
+    const key = `${ymdInTz(new Date())}_${isCutoff ? "cutoff" : "day"}`;
     if (lastAutoCloseNoticeKeyRef.current === key) return;
     lastAutoCloseNoticeKeyRef.current = key;
 
@@ -287,7 +328,7 @@ export default function CajaPage() {
   const hasAutoClosedToday = () => {
     try {
       if (typeof window === "undefined") return false;
-      const key = `joyeria_caja_autoclose_${ymdLocal(new Date())}`;
+      const key = `joyeria_caja_autoclose_${ymdInTz(new Date())}`;
       return localStorage.getItem(key) === "1";
     } catch {
       return false;
@@ -297,7 +338,7 @@ export default function CajaPage() {
   const markAutoClosedToday = () => {
     try {
       if (typeof window === "undefined") return;
-      const key = `joyeria_caja_autoclose_${ymdLocal(new Date())}`;
+      const key = `joyeria_caja_autoclose_${ymdInTz(new Date())}`;
       localStorage.setItem(key, "1");
     } catch {}
   };
@@ -671,7 +712,7 @@ export default function CajaPage() {
         if (cajaEstado !== "ABIERTA") return;
 
         const now = new Date();
-        const nowYMD = ymdLocal(now);
+          const nowYMD = ymdInTz(now);
 
         // 1) Si la caja abierta pertenece a un día anterior -> cerrar YA
         let shouldClose = false;
@@ -679,7 +720,7 @@ export default function CajaPage() {
 
         if (cierreActual?.fecha_inicio) {
           const start = new Date(cierreActual.fecha_inicio);
-          const startYMD = ymdLocal(start);
+            const startYMD = ymdInTz(start);
 
           if (startYMD !== nowYMD) {
             shouldClose = true;
@@ -689,7 +730,8 @@ export default function CajaPage() {
 
         // 2) Corte por hora (23:50)
         if (!shouldClose) {
-          const mins = now.getHours() * 60 + now.getMinutes();
+            const tzNow = tzParts(now);
+            const mins = tzNow.hour * 60 + tzNow.minute;
           const threshold = AUTO_CLOSE_AT.hour * 60 + AUTO_CLOSE_AT.minute;
 
           if (mins >= threshold) {
