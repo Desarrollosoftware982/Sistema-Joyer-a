@@ -216,7 +216,10 @@ router.post("/users/invite", async (req, res) => {
         },
       });
 
-      const url = `${APP_BASE}/reset-password?token=${token}&email=${encodeURIComponent(mail)}`;
+      const url = `${APP_BASE}/dashboard/reset-password?token=${encodeURIComponent(
+        token
+      )}&email=${encodeURIComponent(mail)}`;
+      const urlHtml = url.replace(/&/g, "&amp;");
 
       // ✅ SOLO CAMBIO: HTML premium + LOGO (misma lógica, mismos datos)
       // (Más compatible: sin flex; centrado con tablas)
@@ -286,7 +289,7 @@ router.post("/users/invite", async (req, res) => {
                   Si el botón no funciona, copie y pegue este enlace en su navegador:
                 </p>
                 <p style="margin:8px 0 0 0;word-break:break-all;font-size:12px;line-height:1.6;">
-                  <a href="${url}" style="color:#e3c578;text-decoration:underline;">${url}</a>
+                  <a href="${url}" style="color:#e3c578;text-decoration:underline;">${urlHtml}</a>
                 </p>
 
                 <div style="margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);">
