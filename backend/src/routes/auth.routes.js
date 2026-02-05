@@ -549,7 +549,9 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
       select: { id: true },
     });
 
-    const url = `${APP_BASE}/dashboard/reset-password?token=${token}&email=${encodeURIComponent(mail)}`;
+    const url = `${APP_BASE}/dashboard/reset-password?token=${encodeURIComponent(
+      token
+    )}&email=${encodeURIComponent(mail)}`;
 
     try {
       await sendMail({
@@ -558,7 +560,8 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
         html: `
           <p>Se solicitó restablecer su contraseña.</p>
           <p>Este enlace vence en <b>15 minutos</b> y solo puede usarse una vez:</p>
-          <p><a href="${url}">Restablecer contraseña</a></p>
+          <p><a href="${url}">${url}</a></p>
+          <p>Si su correo no detecta el enlace, cópielo y péguelo en el navegador.</p>
           <p>Si usted no solicitó esto, ignore este correo.</p>
         `,
         text: `Restablecer contraseña (vence en 15 min): ${url}`,

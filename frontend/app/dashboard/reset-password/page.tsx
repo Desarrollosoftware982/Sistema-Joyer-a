@@ -16,9 +16,20 @@ function ResetPasswordInner() {
   const emailRaw = useMemo(() => sp.get("email") || "", [sp]);
   const tokenRaw = useMemo(() => sp.get("token") || "", [sp]);
 
+  const [overrideEmail, setOverrideEmail] = useState<string | null>(null);
+  const [overrideToken, setOverrideToken] = useState<string | null>(null);
+  const [manualEmail, setManualEmail] = useState("");
+  const [manualToken, setManualToken] = useState("");
+
   // ✅ normalización segura (sin cambiar UI)
-  const email = useMemo(() => emailRaw.trim().toLowerCase(), [emailRaw]);
-  const token = useMemo(() => tokenRaw.trim(), [tokenRaw]);
+  const email = useMemo(
+    () => (overrideEmail ?? emailRaw).trim().toLowerCase(),
+    [overrideEmail, emailRaw]
+  );
+  const token = useMemo(
+    () => (overrideToken ?? tokenRaw).trim(),
+    [overrideToken, tokenRaw]
+  );
 
   const [newPassword, setNewPassword] = useState("");
   const [newPassword2, setNewPassword2] = useState("");
@@ -182,6 +193,39 @@ function ResetPasswordInner() {
             <div className="space-y-5 text-center">
               <div className="text-[11px] text-red-300 bg-red-900/30 border border-red-700 rounded-lg px-3 py-3 leading-relaxed">
                 Enlace inválido o vencido. Solicita uno nuevo.
+              </div>
+              <div className="text-left space-y-2">
+                <p className="text-[11px] text-[#c9b296]">
+                  Si tu enlace llegó incompleto, pega el token y correo manualmente:
+                </p>
+                <input
+                  type="email"
+                  className="w-full rounded-xl border border-[#6b232b] bg-[#2b0a0b]/70 px-3 py-2 text-sm text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f] focus:border-[#d6b25f]"
+                  placeholder="tu correo"
+                  value={manualEmail}
+                  onChange={(e) => setManualEmail(e.target.value)}
+                  autoComplete="email"
+                />
+                <input
+                  type="text"
+                  className="w-full rounded-xl border border-[#6b232b] bg-[#2b0a0b]/70 px-3 py-2 text-sm text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f] focus:border-[#d6b25f]"
+                  placeholder="token"
+                  value={manualToken}
+                  onChange={(e) => setManualToken(e.target.value)}
+                />
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!manualEmail || !manualToken) return;
+                    setOverrideEmail(manualEmail);
+                    setOverrideToken(manualToken);
+                    setInvalidLink(false);
+                    setChecking(true);
+                  }}
+                  className="w-full inline-flex items-center justify-center rounded-xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/15 px-4 py-2.5 text-sm font-semibold text-[#f8f1e6] transition-all"
+                >
+                  Usar estos datos
+                </button>
               </div>
               <button
                 type="button"
