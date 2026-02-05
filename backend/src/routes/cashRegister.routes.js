@@ -630,6 +630,13 @@ router.get(
       });
 
       let estado = 'SIN_APERTURA';
+      if (cierre) {
+        const nowY = tzYMD(new Date(), BUSINESS_TZ);
+        const cierreY = tzYMD(new Date(cierre.fecha_inicio), BUSINESS_TZ);
+        if (cierreY !== nowY) {
+          cierre = null;
+        }
+      }
       if (cierre) estado = cierre.fecha_fin ? 'CERRADA' : 'ABIERTA';
 
       return res.json({
