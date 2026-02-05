@@ -141,6 +141,7 @@ export default function ReporteVentasAdminPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (user?.rol?.toUpperCase?.() !== "ADMIN") return;
 
     const loadOptions = async () => {
       try {
@@ -188,7 +189,7 @@ export default function ReporteVentasAdminPage() {
     };
 
     loadOptions();
-  }, [token]);
+  }, [token, user]);
 
   const range = useMemo(() => {
     return buildRange(scope, {
