@@ -20,6 +20,8 @@ if (!JWT_SECRET) {
 }
 
 const JWT_EXPIRES_IN = process.env.JWT_EXPIRES_IN || "8h";
+const JWT_ISSUER = process.env.JWT_ISSUER;
+const JWT_AUDIENCE = process.env.JWT_AUDIENCE;
 
 // ✅ PRODUCCIÓN (Render 1 service): APP_URL debe ser público (no localhost)
 const APP_URL =
@@ -98,19 +100,25 @@ function normalizeRoleName(roleName) {
 
 function signToken(user, roleName) {
   const role = normalizeRoleName(roleName);
-  return jwt.sign({ userId: user.id, roleName: role }, JWT_SECRET, {
+  const options = {
     expiresIn: JWT_EXPIRES_IN,
     algorithm: "HS256",
-  });
+  };
+  if (JWT_ISSUER) options.issuer = JWT_ISSUER;
+  if (JWT_AUDIENCE) options.audience = JWT_AUDIENCE;
+  return jwt.sign({ userId: user.id, roleName: role }, JWT_SECRET, options);
 }
 
 // Token corto para completar MFA (5 min)
 function signMfaToken(user, roleName) {
   const role = normalizeRoleName(roleName);
-  return jwt.sign({ userId: user.id, roleName: role, purpose: "mfa" }, JWT_SECRET, {
+  const options = {
     expiresIn: "5m",
     algorithm: "HS256",
-  });
+  };
+  if (JWT_ISSUER) options.issuer = JWT_ISSUER;
+  if (JWT_AUDIENCE) options.audience = JWT_AUDIENCE;
+  return jwt.sign({ userId: user.id, roleName: role, purpose: "mfa" }, JWT_SECRET, options);
 }
 
 function makeResetToken() {
