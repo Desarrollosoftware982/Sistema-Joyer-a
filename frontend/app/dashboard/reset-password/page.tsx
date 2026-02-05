@@ -16,20 +16,8 @@ function ResetPasswordInner() {
   const emailRaw = useMemo(() => sp.get("email") || "", [sp]);
   const tokenRaw = useMemo(() => sp.get("token") || "", [sp]);
 
-  const [overrideEmail, setOverrideEmail] = useState<string | null>(null);
-  const [overrideToken, setOverrideToken] = useState<string | null>(null);
-  const [manualEmail, setManualEmail] = useState("");
-  const [manualToken, setManualToken] = useState("");
-
-  // ✅ normalización segura (sin cambiar UI)
-  const email = useMemo(
-    () => (overrideEmail ?? emailRaw).trim().toLowerCase(),
-    [overrideEmail, emailRaw]
-  );
-  const token = useMemo(
-    () => (overrideToken ?? tokenRaw).trim(),
-    [overrideToken, tokenRaw]
-  );
+  const email = useMemo(() => emailRaw.trim().toLowerCase(), [emailRaw]);
+  const token = useMemo(() => tokenRaw.trim(), [tokenRaw]);
 
   const [newPassword, setNewPassword] = useState("");
   const [newPassword2, setNewPassword2] = useState("");
@@ -58,7 +46,6 @@ function ResetPasswordInner() {
           )}&email=${encodeURIComponent(email)}`
         );
 
-        // ✅ evita crash si no viene JSON
         const data = await res.json().catch(() => null);
 
         if (!alive) return;
@@ -90,10 +77,8 @@ function ResetPasswordInner() {
   const confirmTouched = newPassword2.length > 0;
   const confirmMatch = newPassword === newPassword2;
 
-  // ✅ ULTRA PRO: reglas completas + confirmación
   const allRulesOk = hasMinLength && hasUpper && hasLower && hasNumber && hasSymbol;
 
-  // ✅ ULTRA PRO: habilitar solo si cumple TODO, link válido, y no está cargando/validando
   const canSubmit =
     !checking && !invalidLink && !loading && allRulesOk && confirmTouched && confirmMatch;
 
@@ -102,7 +87,6 @@ function ResetPasswordInner() {
     setError(null);
     setMsg(null);
 
-    // ✅ ULTRA PRO: hard-guard (aunque intenten enviar con Enter / hacks)
     if (!canSubmit) return;
 
     if (!email || !token) {
@@ -113,7 +97,6 @@ function ResetPasswordInner() {
     try {
       setLoading(true);
 
-      // ✅ ULTRA PRO: re-validar enlace justo antes de resetear (por si venció en la pantalla)
       const pre = await fetch(
         `${API_URL}/api/auth/reset-password/validate?token=${encodeURIComponent(
           token
@@ -130,19 +113,17 @@ function ResetPasswordInner() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          email, // ✅ ya viene normalizado
+          email,
           token,
           newPassword,
         }),
       });
 
-      // ✅ evita crash si no viene JSON
       const data = await res.json().catch(() => null);
 
       if (!res.ok || !data?.ok) {
         const msgText = String(data?.message || "No se pudo restablecer la contraseña.");
 
-        // ✅ si es enlace inválido/vencido/ya usado, mandamos al flujo correcto
         if (msgText.toLowerCase().includes("enlace") || msgText.toLowerCase().includes("link")) {
           setInvalidLink(true);
           return;
@@ -193,39 +174,6 @@ function ResetPasswordInner() {
             <div className="space-y-5 text-center">
               <div className="text-[11px] text-red-300 bg-red-900/30 border border-red-700 rounded-lg px-3 py-3 leading-relaxed">
                 Enlace inválido o vencido. Solicita uno nuevo.
-              </div>
-              <div className="text-left space-y-2">
-                <p className="text-[11px] text-[#c9b296]">
-                  Si tu enlace llegó incompleto, pega el token y correo manualmente:
-                </p>
-                <input
-                  type="email"
-                  className="w-full rounded-xl border border-[#6b232b] bg-[#2b0a0b]/70 px-3 py-2 text-sm text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f] focus:border-[#d6b25f]"
-                  placeholder="tu correo"
-                  value={manualEmail}
-                  onChange={(e) => setManualEmail(e.target.value)}
-                  autoComplete="email"
-                />
-                <input
-                  type="text"
-                  className="w-full rounded-xl border border-[#6b232b] bg-[#2b0a0b]/70 px-3 py-2 text-sm text-[#f8f1e6] placeholder-[#b39878] focus:outline-none focus:ring-2 focus:ring-[#d6b25f] focus:border-[#d6b25f]"
-                  placeholder="token"
-                  value={manualToken}
-                  onChange={(e) => setManualToken(e.target.value)}
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (!manualEmail || !manualToken) return;
-                    setOverrideEmail(manualEmail);
-                    setOverrideToken(manualToken);
-                    setInvalidLink(false);
-                    setChecking(true);
-                  }}
-                  className="w-full inline-flex items-center justify-center rounded-xl border border-[#d6b25f]/60 bg-[#d6b25f]/10 hover:bg-[#d6b25f]/15 px-4 py-2.5 text-sm font-semibold text-[#f8f1e6] transition-all"
-                >
-                  Usar estos datos
-                </button>
               </div>
               <button
                 type="button"
@@ -353,4 +301,3 @@ export default function ResetPasswordPage() {
     </Suspense>
   );
 }
-
