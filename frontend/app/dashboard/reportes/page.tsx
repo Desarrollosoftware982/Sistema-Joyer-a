@@ -233,6 +233,7 @@ export default function ReportesPage() {
 
   // ========= CARGAR HISTORIAL DE CIERRES =========
   const loadHistory = async () => {
+    if (user?.rol?.toUpperCase?.() !== "ADMIN") return;
     if (!token) return;
     try {
       setLoadingHistory(true);
@@ -447,22 +448,24 @@ export default function ReportesPage() {
                   interna.
                 </p>
               </div>
-              <button
-                type="button"
-                onClick={async () => {
-                  const next = !historyOpen;
-                  setHistoryOpen(next);
-                  if (next && history.length === 0) {
-                    await loadHistory();
-                  }
-                }}
-                className="text-xs px-3 py-1.5 rounded-full border border-[#6b232b] hover:border-[#e3c578] hover:text-[#e3c578] transition-colors"
-              >
-                {historyOpen ? "Ocultar" : "Mostrar"}
-              </button>
+              {user?.rol?.toUpperCase?.() === "ADMIN" && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const next = !historyOpen;
+                    setHistoryOpen(next);
+                    if (next && history.length === 0) {
+                      await loadHistory();
+                    }
+                  }}
+                  className="text-xs px-3 py-1.5 rounded-full border border-[#6b232b] hover:border-[#e3c578] hover:text-[#e3c578] transition-colors"
+                >
+                  {historyOpen ? "Ocultar" : "Mostrar"}
+                </button>
+              )}
             </div>
 
-            {historyOpen && (
+            {historyOpen && user?.rol?.toUpperCase?.() === "ADMIN" && (
               <>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
                   <div>
