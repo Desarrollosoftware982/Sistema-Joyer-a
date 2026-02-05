@@ -549,7 +549,7 @@ router.post("/forgot-password", forgotLimiter, async (req, res) => {
       select: { id: true },
     });
 
-    const url = `${APP_BASE}/reset-password?token=${token}&email=${encodeURIComponent(mail)}`;
+    const url = `${APP_BASE}/dashboard/reset-password?token=${token}&email=${encodeURIComponent(mail)}`;
 
     try {
       await sendMail({
