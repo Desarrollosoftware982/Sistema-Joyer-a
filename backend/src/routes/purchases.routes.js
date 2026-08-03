@@ -158,6 +158,53 @@ router.post(
       });
     }
 
+    // 🛡️ Protección anti doble importación: si en las últimas 24 h ya se
+    // importó una compra con las mismas filas y piezas, se pide confirmación
+    // explícita (confirmarDuplicado: true) antes de volver a sumar stock.
+    const confirmarDuplicado = req.body?.confirmarDuplicado === true;
+
+    if (!confirmarDuplicado) {
+      try {
+        const totalPiezas =
+          Math.round(filas.reduce((acc, f) => acc + f.cantidad, 0) * 1000) / 1000;
+
+        const gemelas = await prisma.$queryRaw`
+          SELECT c.id, c.creado_en,
+                 COUNT(cd.id)::int          AS filas,
+                 SUM(cd.cantidad)::numeric  AS piezas
+          FROM compras c
+          JOIN compras_detalle cd ON cd.compra_id = c.id
+          WHERE c.creado_en > now() - interval '24 hours'
+            AND c.estado <> 'ANULADA'
+          GROUP BY c.id
+          HAVING COUNT(cd.id) = ${filas.length}
+             AND ROUND(SUM(cd.cantidad), 3) = ROUND(${totalPiezas}::numeric, 3)
+          ORDER BY c.creado_en DESC
+          LIMIT 1
+        `;
+
+        if (Array.isArray(gemelas) && gemelas.length > 0) {
+          const g = gemelas[0];
+          return res.status(409).json({
+            ok: false,
+            code: 'COMPRA_DUPLICADA',
+            message:
+              'Ya se importó una compra idéntica en las últimas 24 horas. ' +
+              'Si la confirmas, las cantidades se sumarán OTRA VEZ al inventario.',
+            data: {
+              compraId: g.id,
+              fecha: g.creado_en,
+              filas: Number(g.filas),
+              piezas: Number(g.piezas),
+            },
+          });
+        }
+      } catch (dupErr) {
+        // La protección nunca debe bloquear una importación legítima
+        console.warn('No se pudo verificar compra duplicada:', dupErr.message);
+      }
+    }
+
     try {
       const resultado = await prisma.$transaction(async (tx) => {
         // 1) Resolver sucursal (usa SP por defecto)

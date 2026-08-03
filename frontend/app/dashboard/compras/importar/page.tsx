@@ -836,6 +836,30 @@ export default function ImportComprasPage() {
   // ==========================
   // 4) Enviar importación
   // ==========================
+  const sendImport = async (confirmarDuplicado: boolean) => {
+    const payload = {
+      sucursalId: null,
+      proveedorId: null,
+      moneda: "GTQ",
+      tipoCambio: 1,
+      margenDefault: 0.4,
+      confirmarDuplicado,
+      items, // ✅ ya incluye barcode real (si faltaba, fue generado aquí)
+    };
+
+    const res = await fetch(buildApiUrl(`/api/purchases/import`), {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${token}`,
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const data: ImportResponse & { code?: string } = await res.json();
+    return { res, data };
+  };
+
   const handleImport = async () => {
     if (!token) return;
     if (items.length === 0) {
@@ -850,25 +874,31 @@ export default function ImportComprasPage() {
     setLabelsToPrint([]);
 
     try {
-      const payload = {
-        sucursalId: null,
-        proveedorId: null,
-        moneda: "GTQ",
-        tipoCambio: 1,
-        margenDefault: 0.4,
-        items, // ✅ ya incluye barcode real (si faltaba, fue generado aquí)
-      };
+      let { res, data } = await sendImport(false);
 
-      const res = await fetch(buildApiUrl(`/api/purchases/import`), {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
-        body: JSON.stringify(payload),
-      });
+      // 🛡️ El backend detectó una compra idéntica reciente: pedir confirmación
+      if (res.status === 409 && data.code === "COMPRA_DUPLICADA") {
+        const info = (data as any)?.data || {};
+        const fecha = info.fecha
+          ? new Date(info.fecha).toLocaleString("es-GT")
+          : "hace poco";
 
-      const data: ImportResponse = await res.json();
+        const continuar = window.confirm(
+          `⚠️ Ya existe una compra idéntica importada el ${fecha} ` +
+            `(${info.filas ?? "?"} filas, ${info.piezas ?? "?"} piezas).\n\n` +
+            `Si continúas, las cantidades se sumarán OTRA VEZ al inventario.\n\n` +
+            `¿Importar de todas formas?`
+        );
+
+        if (!continuar) {
+          setServerError(
+            "Importación cancelada: este archivo ya se había importado antes."
+          );
+          return;
+        }
+
+        ({ res, data } = await sendImport(true));
+      }
 
       if (!res.ok || data.ok === false) {
         throw new Error(data.message || "Error importando compra masiva.");
