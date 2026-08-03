@@ -138,6 +138,7 @@ export default function CajaChicaCajeroPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (user?.rol?.toUpperCase?.() !== "ADMIN") return;
 
     const loadOptions = async () => {
       const res = await fetch(`${API_URL}/api/cash-register/history`, {
@@ -173,7 +174,7 @@ export default function CajaChicaCajeroPage() {
     };
 
     loadOptions();
-  }, [token]);
+  }, [token, user]);
 
   const getQueryString = (fromValue = from, toValue = to) => {
     const params = new URLSearchParams();

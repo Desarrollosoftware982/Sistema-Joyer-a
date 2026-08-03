@@ -137,6 +137,7 @@ export default function CajaChicaAdminPage() {
 
   useEffect(() => {
     if (!token) return;
+    if (user?.rol?.toUpperCase?.() !== "ADMIN") return;
 
     const loadOptions = async () => {
       const res = await fetch(`${API_URL}/api/cash-register/history`, {
@@ -180,7 +181,7 @@ export default function CajaChicaAdminPage() {
     };
 
     loadOptions();
-  }, [token]);
+  }, [token, user]);
 
   const queryString = useMemo(() => {
     const params = new URLSearchParams();

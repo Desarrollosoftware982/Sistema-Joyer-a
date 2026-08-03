@@ -107,6 +107,57 @@ router.post(
         .json({ ok: false, message: 'No se recibieron items para la compra' });
     }
 
+    // ✅ Normalizar y validar TODAS las filas ANTES de abrir la transacción:
+    // los errores de datos devuelven 400 sin gastar tiempo de transacción.
+    const filas = [];
+    for (let i = 0; i < items.length; i++) {
+      const raw = items[i];
+
+      // barcode: limpia placeholders (AUTO, -, una letra, etc.)
+      const codigoBarrasRaw = raw.codigo_barras ?? raw.codigoBarras ?? null;
+      const codigoBarrasStr =
+        codigoBarrasRaw === null ? '' : String(codigoBarrasRaw).trim();
+      const codigoBarras = isBarcodePlaceholder(codigoBarrasStr)
+        ? null
+        : codigoBarrasStr;
+
+      const sku = raw.sku ? String(raw.sku).trim() : null;
+      const nombreProducto = String(
+        raw.nombre_producto || raw.nombreProducto || ''
+      ).trim();
+      const categoriaNombre = String(raw.categoria || '').trim().toUpperCase();
+
+      const cantidad = Number(raw.cantidad) || 0;
+      const costoCompra = Number(raw.costo_compra ?? raw.costoCompra ?? 0) || 0;
+      const costoEnvio = Number(raw.costo_envio ?? raw.costoEnvio ?? 0) || 0;
+      const costoImpuestos =
+        Number(raw.costo_impuestos ?? raw.costoImpuestos ?? 0) || 0;
+      const costoDesaduanaje =
+        Number(raw.costo_desaduanaje ?? raw.costoDesaduanaje ?? 0) || 0;
+      const margen = raw.porcentaje_margen ?? raw.margen ?? null;
+
+      if (!nombreProducto || !cantidad || costoCompra <= 0) {
+        return res.status(400).json({
+          ok: false,
+          message: `Fila ${i + 1}: datos incompletos (nombre, cantidad, costo_compra son obligatorios)`,
+        });
+      }
+
+      filas.push({
+        fila: i + 1,
+        codigoBarras,
+        sku,
+        nombreProducto,
+        categoriaNombre,
+        cantidad,
+        costoCompra,
+        costoEnvio,
+        costoImpuestos,
+        costoDesaduanaje,
+        margen,
+      });
+    }
+
     try {
       const resultado = await prisma.$transaction(async (tx) => {
         // 1) Resolver sucursal (usa SP por defecto)
@@ -151,103 +202,86 @@ router.post(
 
         const resumen = [];
 
-        for (let i = 0; i < items.length; i++) {
-          const raw = items[i];
+        // 3) Categorías: un solo upsert por nombre distinto (antes era 1 por fila)
+        const categoriasCache = new Map();
+        for (const f of filas) {
+          if (!f.categoriaNombre || categoriasCache.has(f.categoriaNombre)) continue;
+          const nombre_norm = normalizeNombreNorm(f.categoriaNombre);
 
-          // ✅ barcode: limpia placeholders (AUTO, -, una letra, etc.)
-          const codigoBarrasRaw = raw.codigo_barras ?? raw.codigoBarras ?? null;
-          const codigoBarrasStr =
-            codigoBarrasRaw === null ? '' : String(codigoBarrasRaw).trim();
-          const codigoBarras = isBarcodePlaceholder(codigoBarrasStr)
-            ? null
-            : codigoBarrasStr;
+          const categoria = await tx.categorias.upsert({
+            where: { nombre: f.categoriaNombre }, // nombre es @unique en tu BD
+            update: {
+              existe: true,
+              // ✅ backfill por si existía antes sin nombre_norm
+              nombre_norm,
+            },
+            create: {
+              nombre: f.categoriaNombre,
+              existe: true,
+              nombre_norm,
+            },
+          });
+          categoriasCache.set(f.categoriaNombre, categoria);
+        }
 
-          const skuRaw = raw.sku || null;
-          const nombreProducto = String(
-            raw.nombre_producto || raw.nombreProducto || ''
-          ).trim();
+        // 4) Productos existentes en bloque: 1 consulta en total
+        // (antes eran hasta 2 findUnique POR FILA)
+        const codigosArchivo = filas.map((f) => f.codigoBarras).filter(Boolean);
+        const skusArchivo = filas.map((f) => f.sku).filter(Boolean);
 
-          // Normaliza categoría del archivo (sin tocar tu lógica de negocio)
-          const categoriaNombreInput = String(raw.categoria || '').trim();
+        const condiciones = [];
+        if (codigosArchivo.length) condiciones.push({ codigo_barras: { in: codigosArchivo } });
+        if (skusArchivo.length) condiciones.push({ sku: { in: skusArchivo } });
 
-          const cantidad = Number(raw.cantidad) || 0;
-          const costoCompra =
-            Number(raw.costo_compra ?? raw.costoCompra ?? 0) || 0;
-          const costoEnvio =
-            Number(raw.costo_envio ?? raw.costoEnvio ?? 0) || 0;
-          const costoImpuestos =
-            Number(raw.costo_impuestos ?? raw.costoImpuestos ?? 0) || 0;
-          const costoDesaduanaje =
-            Number(raw.costo_desaduanaje ?? raw.costoDesaduanaje ?? 0) || 0;
-          let margen = raw.porcentaje_margen ?? raw.margen ?? null;
+        const existentes = condiciones.length
+          ? await tx.productos.findMany({ where: { OR: condiciones } })
+          : [];
 
-          if (!nombreProducto || !cantidad || costoCompra <= 0) {
-            throw new Error(
-              `Fila ${i + 1}: datos incompletos (nombre, cantidad, costo_compra son obligatorios)`
-            );
-          }
+        const porCodigo = new Map();
+        const porSku = new Map();
+        for (const p of existentes) {
+          if (p.codigo_barras) porCodigo.set(p.codigo_barras, p);
+          porSku.set(p.sku, p);
+        }
 
-          // 3) Categoría (✅ FIX: nombre_norm es obligatorio en tu Prisma)
-          let categoria = null;
-          if (categoriaNombreInput) {
-            const categoriaNombre = categoriaNombreInput.trim().toUpperCase();
-            const nombre_norm = normalizeNombreNorm(categoriaNombre);
+        const detalleRows = [];
+        const joinCategoriaRows = [];
 
-            categoria = await tx.categorias.upsert({
-              where: { nombre: categoriaNombre }, // nombre es @unique en tu BD
-              update: {
-                existe: true,
-                // ✅ backfill por si existía antes sin nombre_norm
-                nombre_norm,
-              },
-              create: {
-                nombre: categoriaNombre,
-                existe: true,
-                // ✅ requerido por Prisma
-                nombre_norm,
-              },
-            });
-          }
+        for (const f of filas) {
+          const categoria = f.categoriaNombre
+            ? categoriasCache.get(f.categoriaNombre) || null
+            : null;
 
-          // 4) Margen: fila > categoria.margen_recomendado > margenDefault
+          // 5) Margen: fila > categoria.margen_recomendado > margenDefault
           const costoTotalUnit =
-            costoCompra + costoEnvio + costoImpuestos + costoDesaduanaje;
+            f.costoCompra + f.costoEnvio + f.costoImpuestos + f.costoDesaduanaje;
 
           const { precioVenta, margenFraccion } = calcularPrecioVenta(
             costoTotalUnit,
             {
-              margenFila: margen,
+              margenFila: f.margen,
               margenCategoria: categoria?.margen_recomendado ?? null,
               margenDefault,
             }
           );
 
-          // 5) Buscar/crear producto
-          let producto = null;
-
-          if (codigoBarras) {
-            producto = await tx.productos.findUnique({
-              where: { codigo_barras: codigoBarras },
-            });
-          }
-
-          if (!producto && skuRaw) {
-            producto = await tx.productos.findUnique({
-              where: { sku: skuRaw },
-            });
-          }
+          // 6) Buscar/crear producto (barcode primero, luego SKU, igual que antes)
+          let producto =
+            (f.codigoBarras && porCodigo.get(f.codigoBarras)) ||
+            (f.sku && porSku.get(f.sku)) ||
+            null;
 
           let esNuevo = false;
           if (!producto) {
-            const skuFinal = skuRaw || codigoBarras || `SKU-${Date.now()}-${i + 1}`;
+            const skuFinal =
+              f.sku || f.codigoBarras || `SKU-${Date.now()}-${f.fila}`;
 
             producto = await tx.productos.create({
               data: {
                 sku: skuFinal,
-                nombre: nombreProducto,
-                codigo_barras: codigoBarras,
+                nombre: f.nombreProducto,
+                codigo_barras: f.codigoBarras,
                 // ✅ NO fijar precio_venta aquí
-                // precio_venta: precioVenta,
 
                 // opcional: dejarlo inactivo hasta que Ventas lo configure
                 activo: false, // 👈 recomendado para que no salga en catálogo público
@@ -256,14 +290,10 @@ router.post(
                 iva_porcentaje: 0,
                 stock_minimo: 0,
 
-                costo_compra: costoCompra,
-                costo_envio: costoEnvio,
-                costo_impuestos: costoImpuestos,
-                costo_desaduanaje: costoDesaduanaje,
-
-                productos_categorias: categoria
-                  ? { create: { categoria_id: categoria.id } }
-                  : undefined,
+                costo_compra: f.costoCompra,
+                costo_envio: f.costoEnvio,
+                costo_impuestos: f.costoImpuestos,
+                costo_desaduanaje: f.costoDesaduanaje,
               },
             });
 
@@ -273,58 +303,63 @@ router.post(
             producto = await tx.productos.update({
               where: { id: producto.id },
               data: {
-                costo_compra: costoCompra,
-                costo_envio: costoEnvio,
-                costo_impuestos: costoImpuestos,
-                costo_desaduanaje: costoDesaduanaje,
-                // precio_venta: precioVenta,
+                costo_compra: f.costoCompra,
+                costo_envio: f.costoEnvio,
+                costo_impuestos: f.costoImpuestos,
+                costo_desaduanaje: f.costoDesaduanaje,
               },
             });
-
-            if (categoria) {
-              await tx.productos_categorias.upsert({
-                where: {
-                  producto_id_categoria_id: {
-                    producto_id: producto.id,
-                    categoria_id: categoria.id,
-                  },
-                },
-                update: {},
-                create: {
-                  producto_id: producto.id,
-                  categoria_id: categoria.id,
-                },
-              });
-            }
           }
 
-          // 6) Acumular totales
-          subtotalMerc += cantidad * costoCompra;
-          totalImpuestos += cantidad * costoImpuestos;
-          totalEnvio += cantidad * costoEnvio;
-          totalDesadu += cantidad * costoDesaduanaje;
+          // Si el archivo repite el mismo producto, las filas siguientes lo
+          // encuentran en los mapas y entran por la rama de actualización.
+          if (producto.codigo_barras) porCodigo.set(producto.codigo_barras, producto);
+          porSku.set(producto.sku, producto);
 
-          // 7) Detalle de compra (base)
-          await tx.compras_detalle.create({
-            data: {
-              compra_id: compra.id,
+          if (categoria) {
+            joinCategoriaRows.push({
               producto_id: producto.id,
-              cantidad,
-              costo_unitario_base: costoCompra,
-            },
+              categoria_id: categoria.id,
+            });
+          }
+
+          // 7) Acumular totales
+          subtotalMerc += f.cantidad * f.costoCompra;
+          totalImpuestos += f.cantidad * f.costoImpuestos;
+          totalEnvio += f.cantidad * f.costoEnvio;
+          totalDesadu += f.cantidad * f.costoDesaduanaje;
+
+          detalleRows.push({
+            compra_id: compra.id,
+            producto_id: producto.id,
+            cantidad: f.cantidad,
+            costo_unitario_base: f.costoCompra,
           });
 
           resumen.push({
-            fila: i + 1,
+            fila: f.fila,
             productoId: producto.id,
             sku: producto.sku,
             codigo_barras: producto.codigo_barras,
             creado: esNuevo,
-            cantidad,
+            cantidad: f.cantidad,
             costoTotalUnit,
             precioVentaSugerido: precioVenta,
             margenFraccionSugerido: margenFraccion,
           });
+        }
+
+        // Relación producto-categoría y detalle de compra en bloque (2 consultas
+        // en vez de 1-2 por fila)
+        if (joinCategoriaRows.length) {
+          await tx.productos_categorias.createMany({
+            data: joinCategoriaRows,
+            skipDuplicates: true,
+          });
+        }
+
+        if (detalleRows.length) {
+          await tx.compras_detalle.createMany({ data: detalleRows });
         }
 
         // 8) Actualizar cabecera
@@ -372,6 +407,13 @@ router.post(
           compra: compraActualizada,
           resumen,
         };
+      }, {
+        // La importación corre muchas consultas y termina en funciones SQL
+        // pesadas (fn_confirmar_compra + inventariado a bodega). El default de
+        // 5s cortaba la transacción a media carga en producción con el error
+        // "Transaction not found / already closed".
+        maxWait: 15_000,
+        timeout: 180_000,
       });
 
       return res.status(201).json({
@@ -381,10 +423,25 @@ router.post(
       });
     } catch (err) {
       console.error('POST /api/purchases/import error', err);
-      return res.status(500).json({
-        ok: false,
-        message: err.message || 'Error importando compra masiva',
-      });
+
+      let message = err.message || 'Error importando compra masiva';
+
+      // Transacción expirada (P2028): el caso típico con archivos grandes.
+      if (
+        err?.code === 'P2028' ||
+        /Transaction (API error|not found|already closed)/i.test(String(err?.message))
+      ) {
+        message =
+          'La importación tardó demasiado y la base de datos cerró la operación. ' +
+          'No se guardó nada: vuelve a intentarlo y, si el archivo es muy grande, divídelo en partes.';
+      } else if (err?.code === 'P2002') {
+        const campos = Array.isArray(err?.meta?.target)
+          ? err.meta.target.join(', ')
+          : String(err?.meta?.target || 'campo único');
+        message = `Datos duplicados en ${campos}: ya existe un registro con ese valor (revisa SKU, código de barras o categoría repetidos).`;
+      }
+
+      return res.status(500).json({ ok: false, message });
     }
   }
 );

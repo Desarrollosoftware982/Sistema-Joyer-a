@@ -185,9 +185,9 @@ export default function ReportesPage() {
         const res = await fetch(
           buildApiUrl(`/api/cash-register/today${scopeParam}`),
           {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+            headers: {
+              Authorization: `Bearer ${token}`,
+            },
           }
         );
 
